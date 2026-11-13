@@ -1,0 +1,100 @@
+// Converts data/raw.json (Overpass "out geom") into map.js for the game.
+// Usage: node tools/build-map.mjs   (refetch raw.json with tools/fetch.sh)
+import { readFileSync, writeFileSync } from 'node:fs';
+import assert from 'node:assert';
+
+const BBOX = { s: 52.49, w: 13.405, n: 52.5075, e: 13.447 };
+const LAT0 = (BBOX.s + BBOX.n) / 2;
+const KX = Math.cos(LAT0 * Math.PI / 180) * 111320, KY = 110540;
+const X = lon => Math.round((lon - BBOX.w) * KX * 10) / 10;
+const Y = lat => Math.round((BBOX.n - lat) * KY * 10) / 10;
+const W = Math.ceil(X(BBOX.e)), H = Math.ceil(Y(BBOX.s));
+
+// road width in metres (kerb to kerb, roughly) and whether AI cars may route on it
+const ROADS = {
+  primary: [17, 1], secondary: [15, 1], secondary_link: [8, 1], tertiary: [12, 1],
+  unclassified: [9, 1], residential: [9, 1], living_street: [7, 1],
+  service: [5, 0], pedestrian: [8, 0], track: [4, 0],
+  footway: [2.5, 0], path: [2.5, 0], cycleway: [2.5, 0], steps: [2.5, 0],
+};
+
+const flat = geom => geom.flatMap(p => [X(p.lon), Y(p.lat)]);
+
+// Join open way segments (multipolygon members) into closed rings.
+export function joinRings(segs) {
+  const rings = [], open = segs.map(s => s.slice());
+  while (open.length) {
+    let ring = open.pop();
+    for (let grew = true; grew && ring.length > 1;) {
+      grew = false;
+      const a = ring[0], b = ring[ring.length - 1];
+      if (a === b) break;
+      for (let i = 0; i < open.length; i++) {
+        const s = open[i], s0 = s[0], s1 = s[s.length - 1];
+        if (s0 === b) ring = ring.concat(s.slice(1));
+        else if (s1 === b) ring = ring.concat(s.slice(0, -1).reverse());
+        else if (s1 === a) ring = s.concat(ring.slice(1));
+        else if (s0 === a) ring = s.slice().reverse().concat(ring.slice(1));
+        else continue;
+        open.splice(i, 1); grew = true; break;
+      }
+    }
+    rings.push(ring);
+  }
+  return rings;
+}
+assert.deepEqual(joinRings([['a', 'b'], ['c', 'b'], ['c', 'a']]).map(r => r.join('')), ['cabc']);
+
+const raw = JSON.parse(readFileSync(new URL('../data/raw.json', import.meta.url)));
+const out = { w: W, h: H, roads: [], buildings: [], green: [], water: [], nodes: [], adj: [], names: [], nodeName: [] };
+const nodeIdx = new Map(), nameIdx = new Map();
+const nameId = n => { if (!nameIdx.has(n)) { nameIdx.set(n, out.names.length); out.names.push(n); } return nameIdx.get(n); };
+
+const relRings = rel => {
+  const key = p => p.lon + ',' + p.lat, pts = new Map();
+  const segs = rel.members.filter(m => m.type === 'way' && m.role !== 'inner' && m.geometry)
+    .map(m => m.geometry.map(p => { pts.set(key(p), p); return key(p); }));
+  // shortcut: inner rings (courtyards, islands) are ignored; fine for SO36, revisit if holes look wrong
+  return joinRings(segs).filter(r => r.length > 3).map(r => flat(r.map(k => pts.get(k))));
+};
+
+for (const e of raw.elements) {
+  const t = e.tags || {};
+  if (t.building) {
+    // open structures over streets (station roofs, carports) must not become walls
+    if (['roof', 'bridge', 'carport'].includes(t.building) || parseInt(t.layer) < 0) continue;
+    const lv = parseFloat(t['building:levels']);
+    const h = parseFloat(t.height) || (lv ? lv * 3.3 + 1 : 18);
+    const rings = e.type === 'way' ? [flat(e.geometry)] : relRings(e);
+    for (const p of rings) out.buildings.push({ h: Math.round(h), p });
+  } else if (t.natural === 'water') {
+    (e.type === 'way' ? [flat(e.geometry)] : relRings(e)).forEach(p => out.water.push(p));
+  } else if (t.leisure || t.landuse) {
+    if (e.geometry) out.green.push({ k: t.leisure === 'pitch' ? 'pitch' : t.leisure === 'playground' ? 'play' : 'grass', p: flat(e.geometry) });
+  } else if (t.highway && ROADS[t.highway] && t.tunnel !== 'yes' && t.footway !== 'sidewalk' && t.service !== 'parking_aisle') {
+    const [w, drive] = ROADS[t.highway];
+    out.roads.push({ t: t.highway, w, b: t.bridge ? 1 : 0, p: flat(e.geometry) });
+    if (!drive) continue;
+    const name = t.name ? nameId(t.name) : -1;
+    let prev = -1;
+    e.nodes.forEach((id, i) => {
+      if (!nodeIdx.has(id)) {
+        nodeIdx.set(id, out.nodes.length / 2);
+        out.nodes.push(X(e.geometry[i].lon), Y(e.geometry[i].lat));
+        out.adj.push([]); out.nodeName.push(name);
+      }
+      const n = nodeIdx.get(id);
+      if (out.nodeName[n] < 0) out.nodeName[n] = name;
+      // shortcut: oneway tags ignored, AI drives both directions everywhere
+      if (prev >= 0 && !out.adj[n].includes(prev)) { out.adj[n].push(prev); out.adj[prev].push(n); }
+      prev = n;
+    });
+  }
+}
+// draw order: footpaths first, big roads on top
+const rank = r => ['footway', 'path', 'cycleway', 'steps', 'track', 'service', 'pedestrian', 'living_street', 'residential', 'unclassified', 'tertiary', 'secondary_link', 'secondary', 'primary'].indexOf(r.t);
+out.roads.sort((a, b) => rank(a) - rank(b));
+
+writeFileSync(new URL('../map.js', import.meta.url),
+  '// Generated by tools/build-map.mjs from OpenStreetMap data (c) OpenStreetMap contributors, ODbL\nwindow.MAP=' + JSON.stringify(out) + ';\n');
+console.log(`map ${W}x${H} m: ${out.roads.length} roads, ${out.buildings.length} buildings, ${out.water.length} water, ${out.green.length} green, ${out.nodes.length / 2} graph nodes`);

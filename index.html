@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Obst-Taxi</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font: 14px/1.35 ui-monospace, Menlo, monospace; color: #fff; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; left: 16px; top: 14px; text-shadow: 2px 2px 0 #000; pointer-events: none; }
+  #money { font: 900 30px Impact, "Arial Black", sans-serif; color: #9bd32d; }
+  #stars { font-size: 26px; color: #ffd23f; letter-spacing: 2px; }
+  #stars .off { color: rgba(255,255,255,.25); }
+  #speed, #goal { font-weight: bold; }
+  #cargo { margin-top: 6px; display: none; }
+  #bar { width: 180px; height: 10px; border: 2px solid #000; background: #333; margin-top: 3px; }
+  #bar i { display: block; height: 100%; }
+  #phone { position: fixed; right: 16px; top: 14px; width: 300px; max-width: calc(100vw - 32px); background: #1b1f24ee; border: 3px solid #000; border-radius: 14px; overflow: hidden; pointer-events: none; }
+  #phone h2 { margin: 0; padding: 6px 10px; font-size: 13px; background: #2d6a3a; }
+  #msgs { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .m { background: #2c333b; border-radius: 8px; padding: 5px 8px; }
+  .m b { color: #9bd32d; display: block; font-size: 12px; }
+  .m.sys { background: none; color: #ffd23f; padding: 0 8px; }
+  #help { position: fixed; left: 16px; bottom: 10px; font-size: 12px; color: #ddd; text-shadow: 1px 1px 0 #000; }
+  #start { position: fixed; inset: 0; display: grid; place-items: center; background: #000a; text-align: center; padding: 16px; }
+  #start h1 { font: 900 64px Impact, "Arial Black", sans-serif; color: #9bd32d; margin: 0; text-shadow: 4px 4px 0 #000; }
+  #start p { max-width: 520px; margin: 12px auto; }
+  #start kbd { background: #333; border-radius: 4px; padding: 1px 6px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="money"></div>
+  <div id="stars"></div>
+  <div id="speed"></div>
+  <div id="goal"></div>
+  <div id="cargo"><span id="fruit"></span><div id="bar"><i></i></div></div>
+</div>
+<div id="phone"><h2>📱 Fruitsapp</h2><div id="msgs"></div></div>
+<div id="help">Arrows/WASD drive · Space handbrake · Y/N answer messages · Map data © OpenStreetMap contributors</div>
+<div id="start"><div>
+  <h1>OBST-TAXI</h1>
+  <p>Kreuzberg 36. People want exotic fruit, and they want it now. Pick up the goods, deliver them before they turn to mush, and keep the cops from sniffing it out.</p>
+  <p><kbd>↑↓←→</kbd>/<kbd>WASD</kbd> drive · <kbd>Space</kbd> handbrake · <kbd>Y</kbd>/<kbd>N</kbd> answer · lost the cops? Get a respray.</p>
+  <p><b>Press Enter to start</b></p>
+</div></div>
+<script src="map.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
