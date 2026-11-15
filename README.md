@@ -1,12 +1,12 @@
 # Obst-Taxi
 
-Isometric pixel-art driving game on the real street map of Berlin inside the S-Bahn ring (OpenStreetMap). Deliver exotic fruit, don't get caught.
+Pixel-art driving game on the real street map of Berlin inside the S-Bahn ring (OpenStreetMap). Deliver exotic fruit, don't get caught.
 
-**Controls:** arrows/WASD drive (on foot: walk in screen directions) · Space handbrake / sprint · F get out, grab a car (yours, a parked one, or someone else's) · Y/N answer messages · R radio on/off · T next track · +/− zoom · P pixel detail (1–4, remembered) · M big map (drag/wheel, game paused). The view turns with the car in 45° steps so you always look ahead.
+**Controls:** arrows/WASD drive (on foot: walk relative to the camera) · Space handbrake / sprint · F get out, grab a car (yours, a parked one, or someone else's) · Y/N answer messages · R radio on/off · T next track · +/− camera distance · P pixel detail (1–4, remembered) · M big map (drag/wheel, game paused). The camera stays behind the car; buildings between it and you are screened out.
 
 **DirtyDave FM:** put music files into `music/`, run `node tools/playlist.mjs`, start the game. Tracks are not committed.
 
-**Code:** `game.js` simulation (traffic, pedestrians, police, jobs), `iso.js` renderer (64 m tiles baked once, depth buffer, pixel edges, minimap). Look after Pixel Plays by Amir Mushich (MIT, github.com/amirmushichge/pixel-plays).
+**Code:** `game.js` simulation (traffic, pedestrians, police, jobs), `gl.js` WebGL renderer on three.js r158 (`vendor/three.min.js`, MIT): city built in 256 m chunks, chase camera, low-res frame with colour ramps, Bayer dither and depth outlines; `map2d.js` minimap and big map. Pixel look after Pixel Plays by Amir Mushich (MIT, github.com/amirmushichge/pixel-plays). The old isometric renderer is in git history (`iso.js`).
 
 **Play:** open `index.html` in a browser. No server, no build step.
 

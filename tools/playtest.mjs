@@ -69,13 +69,25 @@ const r2 = await ev(`(() => {
   G.wanted = 0; G.stop = null; G.grace = 0; G.tGrace = 0; G.crimeCd = 0;
   const [n, j] = [...SIG].find(([n]) => { const r = nearestEdge(NX(n), NY(n), 3); return r && !r.e.ow; });
   player.x = NX(n); player.y = NY(n);
-  for (let a = 0; a < 6.3; a += 0.1) if (light(j, a)[0] === 'r') { player.a = a; break; }
+  for (let a = 0; a < 6.3; a += 0.1) if (light(j, a)[0] === 'r' && light(j, a)[1] >= 1) { player.a = a; break; }
   player.vx = Math.cos(player.a) * 8; player.vy = Math.sin(player.a) * 8;
   const cop = cars.find(c => c.kind === 'police'); cop.x = player.x + 2; cop.y = player.y + 2;
-  rules(speedOf(player));
+  G.jIn = null; rules(speedOf(player)); rules(speedOf(player)); // first call notes the heading you came in with
   return [light(j, player.a), G.stop && G.stop.reason, G.stop && G.stop.fine];
 })()`);
 console.log('red light -> light, reason, fine:', r2);
+// rear-ended while standing, a cop watching: not your fault
+const r3 = await ev(`(() => { try {
+  G.stop = null; G.wanted = 0; G.tGrace = 0; G.grace = 0; G.rolled = {}; G.warned = {}; G.reports = [];
+  const mk = k => { const c = makeCar(k, startNode, M.adj[startNode][0]); cars.push(c); return c; };
+  const cop = cars.find(c => c.kind === 'police') || mk('police'); cop.x = player.x + 4; cop.y = player.y + 4;
+  player.vx = player.vy = 0;
+  const o = cars.find(c => c.kind === 'traffic') || mk('traffic'); o.x = player.x - Math.cos(player.a) * 3.4; o.y = player.y - Math.sin(player.a) * 3.4; o.a = player.a;
+  o.vx = Math.cos(player.a) * 9; o.vy = Math.sin(player.a) * 9;
+  collide();
+  return [G.wanted, !!G.stop, Object.keys(G.warned).join()];
+} catch (e) { return String(e); } })()`);
+console.log('rear-ended by AI -> wanted, stop, warned (want 0 false ""):', r3);
 await ev('Math.random = window._rnd');
 // pursuit: police chase the last known position, not you. Hide 300 m away -> they search there, then give up
 await ev(`(() => { G.stop = null; G.wanted = 0; G.grace = 0; G.crimeCd = 0; for (const c of cars) { c.chase = false; c.stop = false; }

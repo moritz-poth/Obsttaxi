@@ -1,5 +1,5 @@
 'use strict';
-// Obst-Taxi: isometric fruit delivery on the real OSM street map of Berlin inside the S-Bahn ring.
+// Obst-Taxi: fruit delivery on the real OSM street map of Berlin inside the S-Bahn ring.
 // World units are metres, x east, y south, origin at the north-west corner of the map.
 // The map is big: everything derived from it (collision raster, parked cars, sidewalks) is built in chunks near the player.
 const M = window.MAP, W = M.w, H = M.h;
@@ -464,7 +464,7 @@ async function loadWorks() {
       }
     }
     CHUNKS.clear(); // rebuilt with the closures in them
-    LIVE.works = WORKS.length; tiles.clear();
+    LIVE.works = WORKS.length; worldChanged(); // rebuild the city around you with the roadworks in it
     const near = [...new Set(WORKS.slice().sort((a, b) => segDist(a.pts, player.x, player.y) - segDist(b.pts, player.x, player.y)).map(w => w.street.replace(/ \(.*/, '')))].slice(0, 5);
     if (WORKS.length) msg(null, `🚧 ${WORKS.length} live roadworks today. Near you: ${near.join(', ')}`);
   } catch (e) { LIVE.works = 'offline'; }
@@ -511,7 +511,7 @@ function updateBuses(dt) {
     const rv = (player.vx - b.vx) * nx2 + (player.vy - b.vy) * ny2;
     if (rv < 0) {
       player.vx -= 1.5 * rv * nx2; player.vy -= 1.5 * rv * ny2;
-      if (-rv > 3) { G.shake = Math.min(12, -rv * 1.5); offence('Crashed into a BVG bus', 35); }
+      if (-rv > 3) { G.shake = Math.min(12, -rv * 1.5); if (-(player.vx * nx2 + player.vy * ny2) > Math.max(2.5, b.vx * nx2 + b.vy * ny2)) offence('Crashed into a BVG bus', 35); }
     }
   }
 }
@@ -724,7 +724,7 @@ let player = makeCar('player', startNode, M.adj[startNode][0]);
 player.color = '#9bd32d';
 const shop = place(nearestNode(...SHOP_AT)); // Wrangelkiez
 const cars = [player]; // cars[0] is always the player: in a car, or on foot
-let camX = player.x, camY = player.y; // camera target in world metres (iso.js draws around it)
+let camX = player.x, camY = player.y; // camera target in world metres (gl.js looks at it)
 
 function msg(from, text) {
   const el = document.createElement('div'); el.className = from ? 'm' : 'm sys';
@@ -752,20 +752,37 @@ function report(reason, stars, delay, chance) {
 const SPEED_FINES = [[10, 30], [15, 50], [20, 70], [25, 115], [30, 180], [40, 260], [50, 400], [60, 560], [70, 700], [Infinity, 800]];
 const speedFine = over => SPEED_FINES.find(([m]) => over <= m)[1];
 console.assert(speedFine(12) === 50 && speedFine(26) === 180 && speedFine(99) === 800, 'speedFine');
+function alongEdge(x, y, a, maxD) { // the nearest road centre line running roughly along heading a (either way)
+  let best = null, bd = maxD;
+  for (let i = (x / EG | 0) - 1; i <= (x / EG | 0) + 1; i++) for (let j = (y / EG | 0) - 1; j <= (y / EG | 0) + 1; j++) for (const e of EGRID.get(i + ',' + j) || []) {
+    const ax = NX(e.a), ay = NY(e.a), dx = NX(e.b) - ax, dy = NY(e.b) - ay, l = Math.hypot(dx, dy) || 1;
+    if (Math.abs((Math.cos(a) * dx + Math.sin(a) * dy) / l) < 0.7) continue;
+    const t = clamp(((x - ax) * dx + (y - ay) * dy) / (l * l), 0, 1), d = dist(x, y, ax + dx * t, ay + dy * t);
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
 function rules(sp) {
-  const kmh = Math.abs(sp) * 3.6, r = nearestEdge(player.x, player.y, 10);
-  if (r) G.limit = inWorks(player.x, player.y) ? Math.min(30, r.e.lim) : r.e.lim;
+  const kmh = Math.abs(sp) * 3.6, e = alongEdge(player.x, player.y, player.a, 10), r = e && { e };
+  if (r) G.limit = inWorks(player.x, player.y) ? Math.min(30, r.e.lim) : r.e.lim; // side streets at a junction don't count
   // police deduct a 3 km/h tolerance below 100, and nobody measures 12 km/h over by eye
   const over = Math.floor(kmh - 3 - G.limit);
   if (over > 15) offence('Speeding', speedFine(over), `${Math.round(kmh)} in a ${G.limit} zone`, over <= 25 ? 0.35 : over <= 35 ? 0.7 : 1);
-  if (r && r.e.ow && sp > 2) {
-    const dx = NX(r.e.b) - NX(r.e.a), dy = NY(r.e.b) - NY(r.e.a);
-    if ((Math.cos(player.a) * dx + Math.sin(player.a) * dy) / Math.hypot(dx, dy) < -0.5) offence('Wrong way down a one-way street', 25, '', 0.5);
+  if (r && r.e.ow && sp > 2) { // wrong way only if no road near you allows your direction (dual carriageways!)
+    const dx = NX(r.e.b) - NX(r.e.a), dy = NY(r.e.b) - NY(r.e.a), back = (Math.cos(player.a) * dx + Math.sin(player.a) * dy) / Math.hypot(dx, dy) < -0.5;
+    const fine = [...(EGRID.get((player.x / EG | 0) + ',' + (player.y / EG | 0)) || [])].some(o => {
+      const ox = NX(o.b) - NX(o.a), oy = NY(o.b) - NY(o.a), c = (Math.cos(player.a) * ox + Math.sin(player.a) * oy) / Math.hypot(ox, oy);
+      return o.ow ? c > 0.5 : Math.abs(c) > 0.5;
+    });
+    if (back && !fine) offence('Wrong way down a one-way street', 25, '', 0.5);
   }
-  if (sp > 3) for (const [n, j] of SIG) {
-    if (Math.abs(NX(n) - player.x) > 5 || Math.abs(NY(n) - player.y) > 5 || G.ranJ === j) continue;
-    const [st, t] = light(j, player.a);
-    if (st === 'r') { G.ranJ = j; setTimeout(() => G.ranJ === j && (G.ranJ = null), 5000); offence('Ran a red light', t >= 1 ? 200 : 90, t >= 1 ? 'red for over 1 s' : '', t >= 1 ? 0.9 : 0.6); }
+  // red light: judged by the heading you came in with (turning at a green light must not count), and only a clear red
+  const near = G.jIn && Math.min(...G.jIn.j.nodes.map(n => dist(NX(n), NY(n), player.x, player.y)));
+  if (G.jIn && near > 40) G.jIn = G.ranJ = null;
+  if (!G.jIn) for (const [n, j] of SIG) if (Math.abs(NX(n) - player.x) < 25 && Math.abs(NY(n) - player.y) < 25) { G.jIn = { j, a: player.a }; break; }
+  if (G.jIn && sp > 3 && G.ranJ !== G.jIn.j && near < 5) {
+    const [st, t] = light(G.jIn.j, G.jIn.a);
+    if (st === 'r' && t >= 1) { G.ranJ = G.jIn.j; offence('Ran a red light', 200, 'red for over 1 s', 0.9); }
   }
 }
 // what a cop can actually see: 75 m ahead in a 130° cone, all round within 15 m, never through buildings.
@@ -1020,8 +1037,12 @@ function collide() {
       const other = a === player ? b : a;
       if (player.kind === 'foot') { if (-rv > 4 && other.kind !== 'bike') { G.downT = 1.5; G.shake = 8; } continue; }
       G.shake = Math.min(12, -rv * 1.5);
-      if (other.kind === 'police') { if (Math.abs(speedOf(player)) > 4) crime('Rammed a cop', 2); }
-      else if (other.kind === 'bike') { other.fall = 3; crime(cars.some(p => p.kind === 'police' && sees(p)) ? 'Knocked a cyclist off' : 'Knocked a cyclist off, someone called 110', 1); }
+      // only your fault if you drove into them: your speed towards them beats theirs towards you (rear-ended = not you)
+      const ux = (other.x - player.x) / d, uy = (other.y - player.y) / d, mine = player.vx * ux + player.vy * uy, theirs = -(other.vx * ux + other.vy * uy);
+      if (other.kind === 'bike') other.fall = 3;
+      if (mine < 2.5 || mine < theirs) continue;
+      if (other.kind === 'police') crime('Rammed a cop', 2);
+      else if (other.kind === 'bike') { crime(cars.some(p => p.kind === 'police' && sees(p)) ? 'Knocked a cyclist off' : 'Knocked a cyclist off, someone called 110', 1); }
       else offence('Caused a collision', 35);
     } else if (-rv > 3) for (const o of [a, b]) if (o.kind === 'bike') o.fall = 3;
   }
