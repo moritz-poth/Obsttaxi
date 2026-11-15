@@ -946,6 +946,7 @@ function walk(dt) {
 }
 
 // ---------- DirtyDave FM: plays the tracks listed in music/playlist.js (written by: node tools/playlist.mjs)
+const LOCAL = location.protocol === 'file:'; // developer hints only when playing from the folder, not online
 const RADIO = { on: true, list: [...(window.PLAYLIST || [])].sort(() => Math.random() - 0.5), i: -1, audio: new Audio(), title: '', errors: 0 };
 RADIO.audio.addEventListener('ended', () => { RADIO.errors = 0; nextTrack(); });
 RADIO.audio.addEventListener('error', () => { if (++RADIO.errors < RADIO.list.length) nextTrack(); else RADIO.title = 'no playable tracks'; });
@@ -958,7 +959,7 @@ function nextTrack() {
   if (RADIO.on) RADIO.audio.play().catch(() => {});
 }
 function radioKey(code) {
-  if (!RADIO.list.length) return msg('DirtyDave FM 📻', 'no tracks yet. Put music files into the music folder and run: node tools/playlist.mjs');
+  if (!RADIO.list.length) return LOCAL && msg('DirtyDave FM 📻', 'no tracks yet. Put music files into the music folder and run: node tools/playlist.mjs');
   if (code === 'KeyR') { RADIO.on = !RADIO.on; RADIO.on ? RADIO.audio.play().catch(() => {}) : RADIO.audio.pause(); }
   if (code === 'KeyT') { RADIO.on = true; nextTrack(); }
 }
@@ -1194,7 +1195,7 @@ addEventListener('keydown', e => {
   const k = e.key.toLowerCase(); if (k === 'y' || k === 'n') G.answer = k; // by character: QWERTZ swaps Y/Z
   if (e.code === 'Enter' && !G.started) {
     G.started = true; $('start').remove(); msg(FRED, 'welcome to the business 🍍 phone stays on. clients text u directly.');
-    if (RADIO.list.length) nextTrack(); else msg('DirtyDave FM 📻', 'no tracks yet. Put music files into the music folder and run: node tools/playlist.mjs');
+    if (RADIO.list.length) nextTrack(); else if (LOCAL) msg('DirtyDave FM 📻', 'no tracks yet. Put music files into the music folder and run: node tools/playlist.mjs');
   }
   if (G.started && !e.repeat && (e.code === 'KeyF' || e.code === 'KeyE')) toggleCar();
   if (G.started && !e.repeat && (e.code === 'KeyR' || e.code === 'KeyT')) radioKey(e.code);

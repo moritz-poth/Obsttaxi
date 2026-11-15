@@ -4,7 +4,7 @@ Pixel-art driving game on the real street map of Berlin inside the S-Bahn ring (
 
 **Controls:** arrows/WASD drive (on foot: walk relative to the camera) · Space handbrake / sprint · F get out, grab a car (yours, a parked one, or someone else's) · Y/N answer messages · R radio on/off · T next track · +/− camera distance · P pixel detail (1–4, remembered) · M big map (drag/wheel, game paused). The camera stays behind the car; buildings between it and you are screened out.
 
-**DirtyDave FM:** put music files into `music/`, run `node tools/playlist.mjs`, start the game. Tracks are not committed.
+**DirtyDave FM:** the tracks in `music/` are by a friend of the author, used with permission and not free to reuse (see `music/README.md`). To change them, edit `music/` and run `node tools/playlist.mjs`.
 
 **Code:** `game.js` simulation (traffic, pedestrians, police, jobs), `gl.js` WebGL renderer on three.js r158 (`vendor/three.min.js`, MIT): city built in 256 m chunks, chase camera, low-res frame with colour ramps, Bayer dither and depth outlines; `map2d.js` minimap and big map. Pixel look after Pixel Plays by Amir Mushich (MIT, github.com/amirmushichge/pixel-plays). The old isometric renderer is in git history (`iso.js`).
 
