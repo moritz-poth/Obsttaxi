@@ -44,5 +44,60 @@ console.log('later police dists', await ev('cars.filter(c=>c.kind==="police").ma
 const fps = await ev('new Promise(r=>{let n=0,s=performance.now();(function f(){n++; if(performance.now()-s<2000) requestAnimationFrame(f); else r(n/2)})()})');
 console.log('fps (headless)', await (await cmd('Runtime.evaluate', { expression: 'new Promise(r=>{let n=0,s=performance.now();(function f(){n++; if(performance.now()-s<2000) requestAnimationFrame(f); else r(n/2)})()})', awaitPromise: true, returnByValue: true })).result.result.value);
 await shot('4-later');
+await ev('window._rnd = Math.random; Math.random = () => 0.01; G.rolled = {}'); // discretion rolls always act in these checks
+// traffic rules: a cop sees speeding -> pull-over (no chase); stopping -> fine paid
+await ev('G.wanted=0; for (const c of cars) c.chase=false; G.grace=0; G.stop=null');
+const r1 = await ev(`(() => {
+  const cop = cars.find(c => c.kind === 'police') || spawn('police', 0, 3000);
+  const e = EDGES.find(e => e.lim === 30 && !e.ow && dist(NX(e.a),NY(e.a),NX(e.b),NY(e.b)) > 30);
+  player.x = NX(e.a); player.y = NY(e.a); player.a = Math.atan2(NY(e.b)-NY(e.a), NX(e.b)-NX(e.a));
+  player.vx = Math.cos(player.a) * 18; player.vy = Math.sin(player.a) * 18;
+  cop.x = player.x + 1; cop.y = player.y; cop.vx = cop.vy = 0;
+  G.money = 500; rules(speedOf(player));
+  return [!!G.stop, G.stop && G.stop.reason, G.stop && G.stop.fine, G.wanted, G.limit];
+})()`);
+console.log('speeding 65 in 30 seen by cop -> stop, reason, fine, wanted, limit:', r1);
+await ev('player.vx = player.vy = 0; G.stop.cop.x = player.x - 8; G.stop.cop.y = player.y');
+await sleep(4500);
+console.log('after stopping 4 s -> stop open?', await ev('!!G.stop'), 'money', await ev('G.money'), 'wanted', await ev('G.wanted'));
+// fleeing a stop -> wanted 2
+await ev('G.grace = 0; pullOver(cars.find(c => c.kind === "police"), "Test", 50); player.x += 200');
+await sleep(300);
+console.log('fled stop -> wanted', await ev('G.wanted'), 'stop', await ev('!!G.stop'));
+// red light
+const r2 = await ev(`(() => {
+  G.wanted = 0; G.stop = null; G.grace = 0; G.crimeCd = 0;
+  const [n, j] = [...SIG].find(([n]) => { const r = nearestEdge(NX(n), NY(n), 3); return r && !r.e.ow; });
+  player.x = NX(n); player.y = NY(n);
+  for (let a = 0; a < 6.3; a += 0.1) if (light(j, a)[0] === 'r') { player.a = a; break; }
+  player.vx = Math.cos(player.a) * 8; player.vy = Math.sin(player.a) * 8;
+  const cop = cars.find(c => c.kind === 'police'); cop.x = player.x + 2; cop.y = player.y + 2;
+  rules(speedOf(player));
+  return [light(j, player.a), G.stop && G.stop.reason, G.stop && G.stop.fine];
+})()`);
+console.log('red light -> light, reason, fine:', r2);
+await ev('Math.random = window._rnd');
+// pursuit: police chase the last known position, not you. Hide 300 m away -> they search there, then give up
+await ev(`(() => { G.stop = null; G.wanted = 0; G.grace = 0; G.crimeCd = 0; for (const c of cars) { c.chase = false; c.stop = false; }
+  crime('Test pursuit', 1); const k = G.known;
+  const n = MAIN.find(n => dist(NX(n), NY(n), k.x, k.y) > 300 && dist(NX(n), NY(n), k.x, k.y) < 400);
+  player.x = NX(n); player.y = NY(n); player.vx = player.vy = 0; camX = player.x; camY = player.y;
+  for (const c of cars) if (c.kind === 'police' && dist(c.x, c.y, player.x, player.y) < 120) { c.x = k.x; c.y = k.y; } })()`);
+await sleep(8000);
+console.log('hiding: wanted', await ev('G.wanted'), 'known still old spot', await ev('dist(G.known.x, G.known.y, player.x, player.y) > 250'), 'chasing cops', await ev('cars.filter(c => c.chase).length'), 'any sees me', await ev('seenBy(cars.filter(c => c.kind === "police"))'), 'search r', await ev('Math.round(searchRadius())'));
+await shot('8-search');
+await sleep(20000);
+console.log('after 28 s hidden: wanted', await ev('G.wanted'), 'chasing', await ev('cars.filter(c => c.chase).length'), 'goal', await ev('JSON.stringify(G.known)'));
+console.log('AI wrong-way edges driven:', await ev('cars.filter(c => c.kind === "traffic" && WRONGWAY.has(c.from + "," + c.to)).length'), 'of', await ev('cars.filter(c => c.kind === "traffic").length'));
+console.log('live', await ev('JSON.stringify(LIVE)'), 'area', await ev('G.area.n'), 'buses', await ev('buses.map(b => b.name).join(" ")'));
+await ev('G.stop = null; player.x = 1500; player.y = 1080; camX = player.x; camY = player.y'); await sleep(1500); await shot('5-skalitzer');
+await ev('player.x = 2050; player.y = 1200; camX = player.x; camY = player.y'); await sleep(1500); await shot('6-goerli');
+await ev(`(() => { const e = EDGES.find(e => e.w === 11 && !e.ow && PGRID.has((NX(e.a)/64|0)+','+(NY(e.a)/64|0)) && dist(NX(e.a),NY(e.a),894,928) > 300);
+  player.x = NX(e.a); player.y = NY(e.a); player.a = Math.atan2(NY(e.b)-NY(e.a), NX(e.b)-NX(e.a)); camX = player.x; camY = player.y; })()`);
+await sleep(2500); await shot('7-sidestreet');
+console.log('counts: traffic', await ev('cars.filter(c => c.kind === "traffic").length'), 'onscreen cars', await ev('cars.filter(c => onScreen(c.x, c.y, 0)).length'), 'peds', await ev('peds.length'), 'onscreen peds', await ev('peds.filter(p => onScreen(p.x, p.y, 0)).length'), 'parked', await ev('PARKED.length / 4'));
+const fps2 = await (await cmd('Runtime.evaluate', { expression: 'new Promise(r=>{let n=0,s=performance.now();(function f(){n++; if(performance.now()-s<2000) requestAnimationFrame(f); else r(n/2)})()})', awaitPromise: true, returnByValue: true })).result.result.value;
+console.log('fps with full traffic', fps2);
+console.log('errors after rules', errors);
 console.log('errors', errors);
 ws.close(); chrome.kill();

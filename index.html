@@ -12,6 +12,14 @@
   #stars { font-size: 26px; color: #ffd23f; letter-spacing: 2px; }
   #stars .off { color: rgba(255,255,255,.25); }
   #speed, #goal { font-weight: bold; }
+  #row { display: flex; align-items: center; gap: 10px; margin: 4px 0; }
+  #limit { width: 34px; height: 34px; border-radius: 50%; background: #fff; border: 5px solid #d0021b; color: #000; text-shadow: none;
+    font: 900 15px Arial, sans-serif; display: grid; place-items: center; }
+  #area { font-size: 12px; color: #ddd; margin-top: 4px; }
+  #sus { display: none; margin-top: 4px; font-size: 12px; }
+  #sus div { width: 180px; height: 6px; background: #333; border: 2px solid #000; }
+  #sus i { display: block; height: 100%; background: #4a8cff; }
+  #live { font-size: 11px; color: #aaa; }
   #cargo { margin-top: 6px; display: none; }
   #bar { width: 180px; height: 10px; border: 2px solid #000; background: #333; margin-top: 3px; }
   #bar i { display: block; height: 100%; }
@@ -33,16 +41,19 @@
 <div id="hud">
   <div id="money"></div>
   <div id="stars"></div>
-  <div id="speed"></div>
+  <div id="row"><div id="limit">50</div><div id="speed"></div></div>
   <div id="goal"></div>
+  <div id="area"></div>
+  <div id="sus">👃 cops getting suspicious<div><i></i></div></div>
   <div id="cargo"><span id="fruit"></span><div id="bar"><i></i></div></div>
 </div>
 <div id="phone"><h2>📱 Fruitsapp</h2><div id="msgs"></div></div>
-<div id="help">Arrows/WASD drive · Space handbrake · Y/N answer messages · Map data © OpenStreetMap contributors</div>
+<div id="help"><div id="live"></div>Arrows/WASD drive · Space handbrake · Y/N answer messages · +/− zoom · Data: © OpenStreetMap contributors (ODbL) · VIZ Berlin · BVG via transport.rest · Polizei Berlin Kriminalitätsatlas</div>
 <div id="start"><div>
   <h1>OBST-TAXI</h1>
   <p>Kreuzberg 36. People want exotic fruit, and they want it now. Pick up the goods, deliver them before they turn to mush, and keep the cops from sniffing it out.</p>
   <p><kbd>↑↓←→</kbd>/<kbd>WASD</kbd> drive · <kbd>Space</kbd> handbrake · <kbd>Y</kbd>/<kbd>N</kbd> answer · lost the cops? Get a respray.</p>
+  <p>German traffic rules apply: speed limits, one-way streets, red lights. If a patrol sees you break them, pull over and pay the fine. Drive off and they'll hunt you.</p>
   <p><b>Press Enter to start</b></p>
 </div></div>
 <script src="map.js"></script>
