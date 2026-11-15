@@ -17,7 +17,7 @@ const shot = async name => { const r = await cmd('Page.captureScreenshot'); writ
 const key = (type, code, key) => cmd('Input.dispatchKeyEvent', { type, code, key, windowsVirtualKeyCode: 0 });
 await cmd('Runtime.enable'); await cmd('Page.enable');
 let t0 = Date.now();
-await cmd('Page.navigate', { url: URL }); await sleep(3000);
+await cmd('Page.navigate', { url: URL }); await sleep(+(process.env.LOADMS || 3000));
 console.log('load+init ms ~', Date.now() - t0, 'nodes', await ev('MAIN.length'), 'player', await ev('[player.x|0,player.y|0]'));
 await shot('1-start');
 await key('keyDown', 'Enter', 'Enter'); await key('keyUp', 'Enter', 'Enter');
@@ -53,7 +53,7 @@ const r1 = await ev(`(() => {
   player.x = NX(e.a); player.y = NY(e.a); player.a = Math.atan2(NY(e.b)-NY(e.a), NX(e.b)-NX(e.a));
   player.vx = Math.cos(player.a) * 18; player.vy = Math.sin(player.a) * 18;
   cop.x = player.x + 1; cop.y = player.y; cop.vx = cop.vy = 0;
-  G.money = 500; rules(speedOf(player));
+  G.money = 500; rules(speedOf(player)); player.vx = player.vy = 0; // the cop is 1 m away: stand still or it counts as ramming
   return [!!G.stop, G.stop && G.stop.reason, G.stop && G.stop.fine, G.wanted, G.limit];
 })()`);
 console.log('speeding 65 in 30 seen by cop -> stop, reason, fine, wanted, limit:', r1);
@@ -92,7 +92,7 @@ console.log('AI wrong-way edges driven:', await ev('cars.filter(c => c.kind === 
 console.log('live', await ev('JSON.stringify(LIVE)'), 'area', await ev('G.area.n'), 'buses', await ev('buses.map(b => b.name).join(" ")'));
 await ev('G.stop = null; player.x = 1500; player.y = 1080; camX = player.x; camY = player.y'); await sleep(1500); await shot('5-skalitzer');
 await ev('player.x = 2050; player.y = 1200; camX = player.x; camY = player.y'); await sleep(1500); await shot('6-goerli');
-await ev(`(() => { const e = EDGES.find(e => e.w === 11 && !e.ow && PGRID.has((NX(e.a)/64|0)+','+(NY(e.a)/64|0)) && dist(NX(e.a),NY(e.a),894,928) > 300);
+await ev(`(() => { const e = EDGES.find(e => e.w === 11 && !e.ow && PGRID.has((NX(e.a)/64|0)+','+(NY(e.a)/64|0)) && dist(NX(e.a),NY(e.a),START[0],START[1]) > 300);
   player.x = NX(e.a); player.y = NY(e.a); player.a = Math.atan2(NY(e.b)-NY(e.a), NX(e.b)-NX(e.a)); camX = player.x; camY = player.y; })()`);
 await sleep(2500); await shot('7-sidestreet');
 console.log('counts: traffic', await ev('cars.filter(c => c.kind === "traffic").length'), 'onscreen cars', await ev('cars.filter(c => onScreen(c.x, c.y, 0)).length'), 'peds', await ev('peds.length'), 'onscreen peds', await ev('peds.filter(p => onScreen(p.x, p.y, 0)).length'), 'parked', await ev('PARKED.length / 4'));

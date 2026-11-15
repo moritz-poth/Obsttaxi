@@ -69,13 +69,25 @@ const hexC = s => { let c = HEX.get(s); if (!c) { c = [1, 3, 5].map(i => parseIn
 console.assert(hexC('#ff8000').join() === '255,128,0' && pack(255, 0, 0) === 0xff0000ff, 'colour helpers');
 
 // ---------- projection (absolute screen pixels; linear, so it also maps vectors)
-const PX = (x, y) => (x - y) / R2 * PS;
-const PY = (x, y, z) => ((x + y) / R2 * SIN - z * COS) * PS;
-const DEP = (x, y, z) => (x + y) / R2 * COS + z * SIN; // bigger = nearer the camera
-const LX = -.45, LY = .55; // sun from the south-west: +y walls lit, +x walls in shade
+// The view turns in 8 steps of 45° so the car always drives up the screen. (RX, RY) is the world direction of
+// screen-right, (DX, DY) the one towards the camera (screen-down). View 0 is the classic iso view looking north-west.
+// Sun (LX, LY) and ground shadows (SHX, SHY) turn with the view, so the lighting on screen always looks the same.
+let VROT = 0, RX, RY, DX, DY, LX, LY, SHX, SHY;
+function setView(k) {
+  VROT = (k % 8 + 8) % 8;
+  const d = VROT * Math.PI / 4, a = d - Math.PI / 4, c = Math.cos(d), s = Math.sin(d);
+  RX = Math.cos(a); RY = Math.sin(a); DX = -Math.sin(a); DY = Math.cos(a);
+  LX = -.45 * c - .55 * s; LY = -.45 * s + .55 * c; // view 0: sun from the south-west, +y walls lit, +x walls in shade
+  SHX = .55 * c + .22 * s; SHY = .55 * s - .22 * c; // ground shadow offset per metre of height
+}
+setView(0);
+const PX = (x, y) => (x * RX + y * RY) * PS;
+const PY = (x, y, z) => ((x * DX + y * DY) * SIN - z * COS) * PS;
+const DEP = (x, y, z) => (x * DX + y * DY) * COS + z * SIN; // bigger = nearer the camera
+const facing = (nx, ny) => nx * DX + ny * DY > .015; // a wall with this outward normal can be seen
 // snapped to whole ramp steps: flat faces read as clean pixel-art planes instead of a dither checkerboard
 const lit = (nx, ny) => Math.round(2.1 + 1.7 * (nx * LX + ny * LY)) + .15;
-const SHX = .55, SHY = -.22; // ground shadow offset per metre of height
+console.assert(Math.abs(PX(1, -1) - R2 * PS) < 1e-9 && Math.abs(DEP(1, 1, 0) - R2 * COS) < 1e-9, 'view 0 is the classic iso view');
 
 // a draw target: the frame, or a tile sprite being baked. ox/oy = absolute pixel of its top-left corner
 let T = null, FT = null;
@@ -150,7 +162,7 @@ function obox(x, y, a, l, w, z0, z1, face) {
   const top = P(-1, -1, z1), up = [0, 0, z1 - z0];
   poly([top, P(1, -1, z1), P(1, 1, z1), P(-1, 1, z1)], top, [fx * l, fy * l, 0], [rx * w, ry * w, 0], (u, v, gx, gy) => face(0, u, v, 3.2, gx, gy));
   const side = (f, nx, ny, A, B) => {
-    if (nx + ny <= .02) return; // faces away from the camera
+    if (!facing(nx, ny)) return;
     const li = lit(nx, ny);
     poly([A, B, [B[0], B[1], z1], [A[0], A[1], z1]], A, [B[0] - A[0], B[1] - A[1], 0], up, (u, v, gx, gy) => face(f, u, v, li, gx, gy));
   };
@@ -267,7 +279,7 @@ function prepB(b) {
     const nx = ey * b.ws / len, ny = -ex * b.ws / len; // outward
     // a wall facing a street gets shops and graffiti
     const street = b.k !== 'deck' && !!nearestEdge((ax + bx) / 2 + nx * 5, (ay + by) / 2 + ny * 5, 9);
-    b.edges.push({ ax, ay, bx, by, len, nx, ny, li: lit(nx, ny), street });
+    b.edges.push({ ax, ay, bx, by, len, nx, ny, street });
   }
   // roof furniture: chimneys + satellite dishes on Altbau, plant rooms on flat roofs
   b.bits = [];
@@ -296,7 +308,7 @@ function shopPx(b, s, z, li, gx, gy, R) {
   return tone(R, li - (z < .45 ? .8 : 0) + (h2(gx, gy) - .5) * .35, gx, gy);
 }
 function wallShader(b, e) {
-  const st = STY[b.k] || STY.alt, L = e.len, z0 = b.z0 || 0, Hh = b.h - z0, li = e.li, n = b.n;
+  const st = STY[b.k] || STY.alt, L = e.len, z0 = b.z0 || 0, Hh = b.h - z0, li = lit(e.nx, e.ny), n = b.n;
   const R = ramp(b.fc), Gl = ramp(GLASSC), Fr = ramp(b.frame), Cu = ramp(CURTAIN);
   const cw = st.cw, cells = Math.floor(L / cw), s0 = (L - cells * cw) / 2, shop = e.street && b.shopV >= 0 && b.h > 7;
   return (a, v, gx, gy) => {
@@ -347,7 +359,7 @@ function building(b) {
   prepB(b);
   const z0 = b.z0 || 0, h = b.h, p = b.p;
   for (const e of b.edges) {
-    if (e.nx + e.ny <= .02) continue; // back walls are hidden anyway
+    if (!facing(e.nx, e.ny)) continue; // back walls are hidden anyway
     const A = [e.ax, e.ay, z0];
     poly([A, [e.bx, e.by, z0], [e.bx, e.by, h], [e.ax, e.ay, h]], A, [e.bx - e.ax, e.by - e.ay, 0], [0, 0, h - z0], wallShader(b, e));
   }
@@ -385,7 +397,7 @@ function viaSeg(ax, ay, bx, by) { // U1/U3 Hochbahn deck, 7 m up: two tracks on 
   });
   for (const s of [-1, 1]) {
     const nx = ux * s, ny = uy * s;
-    if (nx + ny <= .02) continue;
+    if (!facing(nx, ny)) continue;
     const B = [ax + nx * 4, ay + ny * 4, Z - 1.1];
     poly([B, [bx + nx * 4, by + ny * 4, Z - 1.1], [bx + nx * 4, by + ny * 4, Z], [ax + nx * 4, ay + ny * 4, Z]], B, [dx, dy, 0], [0, 0, 1.1],
       (u, v, gx, gy) => tone(St, lit(nx, ny) + ((u * L / 1.2) % 1 < .15 ? .7 : 0), gx, gy));
@@ -431,22 +443,25 @@ function materials(x0, y0) {
   g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, NT, NT);
   g.setTransform(MR, 0, 0, MR, -x0 * MR, -y0 * MR); g.lineCap = g.lineJoin = 'round';
   g.fillStyle = MCODE[YARD]; g.fillRect(0, 0, M.w, M.h);
-  for (const a of M.green) if (inT(a.bb)) { g.fillStyle = MCODE[{ pitch: PITCH, play: PLAY }[a.k] || GRASSM]; trace(g, a.p, 1); g.fill(); }
-  g.fillStyle = MCODE[WATERM]; for (const w of WATER) if (inT(w.bb)) { trace(g, w.p, 1); g.fill(); }
-  const roads = M.roads.filter(r => inT(r.bb));
+  const q = kind => query(kind, x0 - 25, y0 - 25, x0 + TILE + 25, y0 + TILE + 25);
+  for (const a of q('green')) if (inT(a.bb)) { g.fillStyle = MCODE[{ pitch: PITCH, play: PLAY }[a.k] || GRASSM]; trace(g, a.p, 1); g.fill(); }
+  g.fillStyle = MCODE[WATERM]; for (const w of q('water')) if (inT(w.bb)) { trace(g, w.p, 1); g.fill(); }
+  const roads = q('roads').sort((a, b) => a.rk - b.rk);
   for (const r of roads) if (!r.car) line(r.t === 'cycleway' ? CYCLE : r.t === 'pedestrian' ? PLAZA : r.t === 'footway' ? PAVE : PATH, r.w, r.p);
   for (const r of roads) if (r.car) line(PAVE, r.w + (r.t === 'service' ? 1.5 : 9), r.p); // Berlin sidewalks, ~4.5 m each side
   for (const r of roads) if (r.car) line(KERB, r.w + .8, r.p);
   for (const r of roads) if (r.car) line(ASPH, r.w, r.p);
   g.setLineDash([3, 4]); for (const r of roads) if (r.car && r.w >= 12) line(MARK, .3, r.p); g.setLineDash([]);
-  for (const r of M.rails) if (!r.v && inT(r.bb)) { line(RAILBED, 3.6, r.p); line(RAIL, 1.9, r.p); line(RAILBED, 1.3, r.p); }
+  for (const r of q('rails')) if (!r.v) { line(RAILBED, 3.6, r.p); line(RAIL, 1.9, r.p); line(RAILBED, 1.3, r.p); }
   // pedestrian crossings: zebra (stripes along the road) or signalled Fußgängerfurt (two dashed lines)
   g.fillStyle = MCODE[MARK];
-  for (let i = 0; i < M.crossings.length; i += 2) {
-    const n = M.crossings[i], x = NX(n), y = NY(n), nb = M.adj[n][0];
-    if (nb === undefined || x < x0 - 10 || x > x0 + TILE + 10 || y < y0 - 10 || y > y0 + TILE + 10) continue;
+  for (let i = 0; i < CROSS.length; i += 3) {
+    const x = CROSS[i], y = CROSS[i + 1];
+    if (x < x0 - 10 || x > x0 + TILE + 10 || y < y0 - 10 || y > y0 + TILE + 10) continue;
+    const n = M.crossings[i / 3 * 2], nb = M.adj[n][0];
+    if (nb === undefined) continue;
     g.save(); g.translate(x, y); g.rotate(Math.atan2(NY(nb) - y, NX(nb) - x));
-    if (M.crossings[i + 1] === 1) for (let k = -4; k <= 4; k++) g.fillRect(-1.5, k - .3, 3, .6);
+    if (CROSS[i + 2] === 1) for (let k = -4; k <= 4; k++) g.fillRect(-1.5, k - .3, 3, .6);
     else for (const o of [-2, 1.6]) for (let k = -4.5; k < 4.5; k += 1) g.fillRect(o, k, .4, .5);
     g.restore();
   }
@@ -473,22 +488,23 @@ function shadows(x0, y0) { // red: cast shadow, green: ambient occlusion along w
     for (let s = 0; s <= steps; s++) { const dx = ox * s / steps, dy = oy * s / steps; g.moveTo(p[0] + dx, p[1] + dy); for (let i = 2; i < p.length; i += 2) g.lineTo(p[i] + dx, p[i + 1] + dy); g.closePath(); }
     g.fill();
   };
-  for (const b of M.buildings) if (near(b.bb, b.h * .6 + 2)) sweep(b.p, b.h);
+  const m = Math.min(250, BMAXH * .6 + 2), bs = query('bs', x0 - m, y0 - m, x0 + TILE + m, y0 + TILE + m);
+  for (const b of bs) if (near(b.bb, b.h * .6 + 2)) sweep(b.p, b.h);
   for (const d of DECKS) if (near(d.bb, 8)) sweep(d.p, d.h);
-  for (let i = 0; i < M.trees.length; i += 3) {
+  for (const i of query('trees', x0 - 40, y0 - 40, x0 + TILE + 40, y0 + TILE + 40)) {
     const x = M.trees[i], y = M.trees[i + 1], r = treeR(i), H = treeH(r) - r * .6;
     if (Math.abs(x - x0 - 32) > 32 + r + H || Math.abs(y - y0 - 32) > 32 + r + H) continue;
     g.beginPath(); g.ellipse(x + SHX * H, y + SHY * H, r * .85, r * .75, 0, 0, 7); g.fill();
   }
   g.strokeStyle = '#f00'; g.lineWidth = 8;
-  for (const r of M.rails) if (r.v && near(r.bb, 10)) { g.beginPath(); for (let i = 0; i < r.p.length; i += 2) g.lineTo(r.p[i] + SHX * 7, r.p[i + 1] + SHY * 7); g.stroke(); }
-  for (let k = 0; k < PARKED.length; k += 4) {
+  for (const r of query('rails', x0 - 10, y0 - 10, x0 + TILE + 10, y0 + TILE + 10)) if (r.v) { g.beginPath(); for (let i = 0; i < r.p.length; i += 2) g.lineTo(r.p[i] + SHX * 7, r.p[i + 1] + SHY * 7); g.stroke(); }
+  for (let ti = x0 / 64 - 1; ti <= x0 / 64 + 1; ti++) for (let tj = y0 / 64 - 1; tj <= y0 / 64 + 1; tj++) for (const k of PGRID.get(ti + ',' + tj) || []) {
     const x = PARKED[k], y = PARKED[k + 1];
     if (PARKED[k + 3] < 0 || x < x0 - 4 || x > x0 + TILE + 4 || y < y0 - 4 || y > y0 + TILE + 4) continue;
     g.save(); g.translate(x + SHX * .8, y + SHY * .8); g.rotate(PARKED[k + 2]); g.fillRect(-2.2, -.9, 4.4, 1.8); g.restore();
   }
   g.globalCompositeOperation = 'lighter'; g.filter = `blur(${MR * .7}px)`; g.strokeStyle = '#0b0'; g.lineWidth = 2.4;
-  for (const b of M.buildings) if (near(b.bb, 4)) { trace(g, b.p, 1); g.stroke(); }
+  for (const b of bs) if (near(b.bb, 4)) { trace(g, b.p, 1); g.stroke(); }
   g.filter = 'none';
   return g.getImageData(0, 0, NT, NT).data;
 }
@@ -497,21 +513,44 @@ const treeR = i => M.trees[i + 2] || 2.8 + 2.2 * hash(i);
 // ---------- tiles: what belongs to each 64 m tile and how far its pixels reach on screen (at 1 px per metre)
 const tiles = new Map();
 let TINFO = null, DECKS = [];
-const px1 = (x, y) => (x - y) / R2, py1 = (x, y, z) => (x + y) / R2 * SIN - z * COS;
+const px1 = (x, y) => x * RX + y * RY, py1 = (x, y, z) => (x * DX + y * DY) * SIN - z * COS;
+const at = (x, y) => TINFO.get(Math.max(0, Math.min(Math.ceil(M.w / TILE) - 1, Math.floor(x / TILE))) + ',' + Math.max(0, Math.min(Math.ceil(M.h / TILE) - 1, Math.floor(y / TILE))));
+function grow(inf, x, y, z0, z1) { // world box of everything drawn in the tile: x0, y0, x1, y1, top
+  const w = inf.w; w[0] = Math.min(w[0], x); w[1] = Math.min(w[1], y); w[2] = Math.max(w[2], x); w[3] = Math.max(w[3], y); w[4] = Math.max(w[4], z1); inf.bk = -1;
+}
+function tileB(inf) { // its screen box at 1 px per metre in the current view
+  if (inf.bk === VROT) return inf.b;
+  const w = inf.w, b = inf.b = [1e9, 1e9, -1e9, -1e9];
+  for (const x of [w[0], w[2]]) for (const y of [w[1], w[3]]) {
+    const u = px1(x, y); b[0] = Math.min(b[0], u); b[2] = Math.max(b[2], u); b[1] = Math.min(b[1], py1(x, y, w[4])); b[3] = Math.max(b[3], py1(x, y, 0));
+  }
+  inf.bk = VROT; return b;
+}
+const tkey = inf => inf.key + '|' + VROT;
+const dropTile = key => { for (let r = 0; r < 8; r++) tiles.delete(key + '|' + r); };
+function tilesIn(ox, oy) { // tiles whose screen box meets the frame at (ox, oy), current view; only near the camera
+  const out = [], R = 330;
+  for (let i = Math.floor((camX - R) / TILE); i <= Math.floor((camX + R) / TILE); i++) for (let j = Math.floor((camY - R) / TILE); j <= Math.floor((camY + R) / TILE); j++) {
+    const inf = TINFO.get(i + ',' + j); if (!inf) continue;
+    const b = tileB(inf);
+    if (b[2] * PS < ox || b[0] * PS > ox + VW || b[3] * PS < oy || b[1] * PS > oy + VH) continue;
+    out.push(inf);
+  }
+  return out;
+}
+const growBox = (inf, bb, z0, z1) => { for (const x of [bb[0], bb[2]]) for (const y of [bb[1], bb[3]]) grow(inf, x, y, z0, z1); };
+function tileAddParked(list) { // parked cars arrive chunk by chunk (game.js ensureChunk)
+  if (!TINFO) return;
+  for (const k of list) { const inf = at(PARKED[k], PARKED[k + 1]); inf.parked.push(k); growBox(inf, [PARKED[k] - 3, PARKED[k + 1] - 3, PARKED[k] + 3, PARKED[k + 1] + 3], 0, 2); dropTile(inf.key); }
+}
 function tileInfo() {
   if (TINFO) return TINFO;
   TINFO = new Map();
   const ni = Math.ceil(M.w / TILE), nj = Math.ceil(M.h / TILE);
   for (let i = 0; i < ni; i++) for (let j = 0; j < nj; j++) {
     const x0 = i * TILE, y0 = j * TILE;
-    TINFO.set(i + ',' + j, { i, j, key: i + ',' + j, b: [px1(x0, y0 + TILE), py1(x0, y0, 0), px1(x0 + TILE, y0), py1(x0 + TILE, y0 + TILE, 0)], bs: [], trees: [], parked: [], via: [], pillars: [], stops: [] });
+    TINFO.set(i + ',' + j, { i, j, key: i + ',' + j, w: [x0, y0, x0 + TILE, y0 + TILE, 0], bk: -1, b: null, bs: [], trees: [], parked: [], via: [], pillars: [], stops: [] });
   }
-  const at = (x, y) => TINFO.get(Math.max(0, Math.min(ni - 1, Math.floor(x / TILE))) + ',' + Math.max(0, Math.min(nj - 1, Math.floor(y / TILE))));
-  const grow = (inf, x, y, z0, z1) => {
-    const b = inf.b, u = px1(x, y);
-    b[0] = Math.min(b[0], u); b[2] = Math.max(b[2], u); b[1] = Math.min(b[1], py1(x, y, z1)); b[3] = Math.max(b[3], py1(x, y, z0));
-  };
-  const growBox = (inf, bb, z0, z1) => { for (const x of [bb[0], bb[2]]) for (const y of [bb[1], bb[3]]) grow(inf, x, y, z0, z1); };
   DECKS = M.decks.map((p, n) => {
     let area = 0, cx = 0, cy = 0; const k = p.length / 2;
     for (let i = 0; i < k; i++) { const j = (i + 1) % k; area += p[2 * i] * p[2 * j + 1] - p[2 * j] * p[2 * i + 1]; cx += p[2 * i]; cy += p[2 * i + 1]; }
@@ -540,13 +579,15 @@ function tileInfo() {
   return TINFO;
 }
 function makeTile(inf) {
-  const x0 = inf.i * TILE, y0 = inf.j * TILE, b = inf.b;
+  const x0 = inf.i * TILE, y0 = inf.j * TILE, b = tileB(inf);
+  for (const [x, y] of [[x0 - 8, y0 - 8], [x0 + TILE + 8, y0 - 8], [x0 - 8, y0 + TILE + 8], [x0 + TILE + 8, y0 + TILE + 8]]) ensureChunk(x / CK | 0, y / CK | 0); // its parked cars (and the neighbours' shadows)
   const ox = Math.floor(b[0] * PS) - 2, oy = Math.floor(b[1] * PS) - 2, t = newTarget(ox, oy, Math.ceil(b[2] * PS) - ox + 2, Math.ceil(b[3] * PS) - oy + 2);
   T = t;
   const mat = materials(x0, y0), shd = shadows(x0, y0), w = t.w, tufts = [];
-  const gx0 = Math.floor(PX(x0, y0 + TILE)), gx1 = Math.ceil(PX(x0 + TILE, y0)), gy0 = Math.floor(PY(x0, y0, 0)), gy1 = Math.ceil(PY(x0 + TILE, y0 + TILE, 0));
+  const cs = [[x0, y0], [x0 + TILE, y0], [x0, y0 + TILE], [x0 + TILE, y0 + TILE]], gxs = cs.map(([x, y]) => PX(x, y)), gys = cs.map(([x, y]) => PY(x, y, 0));
+  const gx0 = Math.floor(Math.min(...gxs)), gx1 = Math.ceil(Math.max(...gxs)), gy0 = Math.floor(Math.min(...gys)), gy1 = Math.ceil(Math.max(...gys));
   for (let gy = gy0; gy < gy1; gy++) for (let gx = gx0; gx < gx1; gx++) {
-    const u = (gx + .5) / PS, v = (gy + .5) / PS / SIN, x = (u + v) / R2, y = (v - u) / R2;
+    const u = (gx + .5) / PS, v = (gy + .5) / PS / SIN, x = u * RX + v * DX, y = u * RY + v * DY;
     if (x < x0 || x >= x0 + TILE || y < y0 || y >= y0 + TILE) continue;
     const mi = ((y - y0) * MR | 0) * NT + ((x - x0) * MR | 0), m = mat[mi];
     if (!m) continue;
@@ -593,7 +634,7 @@ function makeTile(inf) {
 }
 function invalidateTiles(x, y) { // something static changed at (x, y): rebake that tile and its neighbours
   const i = Math.floor(x / TILE), j = Math.floor(y / TILE);
-  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) tiles.delete((i + a) + ',' + (j + b));
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) dropTile((i + a) + ',' + (j + b));
 }
 function blit(t) {
   const fx0 = t.ox - FT.ox, fy0 = t.oy - FT.oy;
@@ -605,7 +646,7 @@ function blit(t) {
 }
 
 // ---------- per-frame effects on the frame buffer
-function unground(ix, iy) { const u = (ix + FT.ox + .5) / PS, v = (iy + FT.oy + .5) / PS / SIN; return [(u + v) / R2, (v - u) / R2]; }
+function unground(ix, iy) { const u = (ix + FT.ox + .5) / PS, v = (iy + FT.oy + .5) / PS / SIN; return [u * RX + v * DX, u * RY + v * DY]; }
 // darken (or colour) the ground under a rotated rectangle; only pixels that show ground, each once
 function groundRect(x, y, a, l, w, fn) {
   const c = Math.cos(a), s = Math.sin(a), r = (l + w) / 2;
@@ -679,29 +720,67 @@ function drawSignals() {
     plot(px, py, 3, st === 'g' ? LAMP.g : LAMP_OFF); plot(px, py, 3 + dz, st === 'y' ? LAMP.y : LAMP_OFF); plot(px, py, 3 + 2 * dz, st === 'r' ? LAMP.r : LAMP_OFF);
   }
 }
-// snap a train to the nearest track (viaduct for U-Bahn); -> [x, y, angle] or null
+// track ends, so a train can roll on from one OSM way into the next
+let RAILEND = null;
+const rkey = (x, y) => Math.round(x) + ',' + Math.round(y);
+function railEnds() {
+  RAILEND = new Map();
+  for (const r of M.rails) for (const [k, start] of [[rkey(r.p[0], r.p[1]), true], [rkey(r.p[r.p.length - 2], r.p[r.p.length - 1]), false]]) {
+    if (!RAILEND.has(k)) RAILEND.set(k, []); RAILEND.get(k).push({ r, start });
+  }
+}
+// d metres along a track from segment i at t, dir +1 towards later points; -> [x, y]
+function railWalk(r, i, t, dir, d) {
+  let p = r.p, x = p[2 * i] + (p[2 * i + 2] - p[2 * i]) * t, y = p[2 * i + 1] + (p[2 * i + 3] - p[2 * i + 1]) * t;
+  for (let guard = 0; guard < 400; guard++) {
+    const ex = dir > 0 ? p[2 * i + 2] : p[2 * i], ey = dir > 0 ? p[2 * i + 3] : p[2 * i + 1], L = Math.hypot(ex - x, ey - y);
+    if (d <= L) return L ? [x + (ex - x) * d / L, y + (ey - y) * d / L] : [x, y];
+    d -= L; x = ex; y = ey; i += dir;
+    if (i < 0 || 2 * i + 3 >= p.length) { // end of this way: continue on a way that starts or ends here
+      if (!RAILEND) railEnds();
+      const nx = (RAILEND.get(rkey(x, y)) || []).find(o => o.r !== r && o.r.v === r.v);
+      if (!nx) return [x, y];
+      r = nx.r; p = r.p;
+      if (nx.start) { i = 0; dir = 1; } else { i = p.length / 2 - 2; dir = -1; }
+    }
+  }
+  return [x, y];
+}
+console.assert(railWalk({ p: [0, 0, 10, 0, 10, 10], v: 0 }, 0, .5, 1, 10).join() === '10,5', 'railWalk');
+// snap a train to the nearest track (viaduct for U-Bahn); -> [x, y, angle, rail, segment, t, dir] or null
 function snapRail(b) {
   let best = null, bd = 40;
   for (const r of M.rails) {
-    if (b.name.startsWith('U') !== !!r.v) continue;
+    if (b.name.startsWith('U') && !r.v) continue; // U-Bahn only where it's up on a viaduct; S-Bahn on any track
     if (b.x < r.bb[0] - 40 || b.x > r.bb[2] + 40 || b.y < r.bb[1] - 40 || b.y > r.bb[3] + 40) continue;
     const p = r.p;
     for (let i = 0; i + 3 < p.length; i += 2) {
       const dx = p[i + 2] - p[i], dy = p[i + 3] - p[i + 1], l2 = dx * dx + dy * dy || 1;
       const t = clamp(((b.x - p[i]) * dx + (b.y - p[i + 1]) * dy) / l2, 0, 1), x = p[i] + dx * t, y = p[i + 1] + dy * t, d = dist(b.x, b.y, x, y);
-      if (d < bd) { bd = d; let a = Math.atan2(dy, dx); if (Math.cos(a - b.a) < 0) a += Math.PI; best = [x, y, a]; }
+      if (d < bd) { bd = d; const a = Math.atan2(dy, dx), dir = Math.cos(a - b.a) < 0 ? -1 : 1; best = [x, y, dir < 0 ? a + Math.PI : a, r, i / 2, t, dir]; }
     }
   }
   return best;
+}
+// a bicycle drawn as 3D lines: two wheels, diamond frame, saddle, handlebar. lying = fallen over
+function bike3d(x, y, a, col = '#2b5c8a', lying) {
+  const fx = Math.cos(a), fy = Math.sin(a), sx = -fy, sy = fx, step = .7 / PS, tyre = pack(30, 30, 34), fr = hexC(col), frame = pack(...fr), dark = pack(...fr.map(v => v * .6 | 0));
+  const P = (along, z) => lying ? [x + fx * along + sx * z, y + fy * along + sy * z, .08] : [x + fx * along, y + fy * along, z];
+  const line = (a0, z0, a1, z1, c) => { const n = Math.max(1, Math.ceil(Math.hypot(a1 - a0, z1 - z0) / step)); for (let k = 0; k <= n; k++) plot(...P(a0 + (a1 - a0) * k / n, z0 + (z1 - z0) * k / n), c); };
+  const R = .34, hub = .52;
+  for (const h of [-hub, hub]) { const n = Math.ceil(2 * Math.PI * R / step); for (let k = 0; k < n; k++) { const t = k / n * 2 * Math.PI; plot(...P(h + Math.cos(t) * R, R + Math.sin(t) * R), tyre); } }
+  line(-hub, R, 0, .3, frame); line(0, .3, -.2, .82, frame); line(-.2, .82, -hub, R, frame); // rear triangle
+  line(-.2, .78, .36, .8, frame); line(0, .3, .36, .8, frame); line(.36, .8, hub, R, frame); // top tube, down tube, fork
+  line(-.3, .9, -.1, .9, dark); line(.36, .8, .4, 1, frame); line(.4, 1, .3, 1, dark); // saddle, stem, handlebar
 }
 const POLICE_C = [226, 230, 236];
 const FRAME_C = [40, 40, 46];
 function drawCar(c) {
   if (c.kind === 'foot') { person(c.x, c.y, c.ph, pedColours(c), G.downT > 0); return; }
   if (c.kind === 'bike') {
-    if (c.fall > 0) { obox(c.x, c.y, c.a + 1.2, 1.7, .14, 0, .15, flat(FRAME_C)); person(c.x + .6, c.y, 0, pedColours(c), true); return; }
-    obox(c.x, c.y, c.a, 1.7, .12, .25, .7, flat(FRAME_C));
-    person(c.x - Math.cos(c.a) * .15, c.y - Math.sin(c.a) * .15, c.ph, pedColours(c), false, .55);
+    if (c.fall > 0) { bike3d(c.x, c.y, c.a + 1.2, c.frame, true); person(c.x + .6, c.y, 0, pedColours(c), true); return; }
+    bike3d(c.x, c.y, c.a, c.frame, false);
+    person(c.x - Math.cos(c.a) * .2, c.y - Math.sin(c.a) * .2, c.ph, pedColours(c), false, .6);
     return;
   }
   car3d(c.x, c.y, c.a, c.police ? POLICE_C : hexC(c.color), { police: c.police, lit: c.kind === 'police' && (c.chase || c.stop || c.block), braking: c.braking,
@@ -712,6 +791,29 @@ function drawHeli(h) { // police helicopter: blue/white body, spinning rotor, sp
   obox(h.x, h.y, h.a, 5.5, 2, 30, 32, (f, u, v, i, gx, gy) => tone(ramp(f > 2 && v < .5 ? POLBLUE : POLICE_C), i, gx, gy));
   obox(h.x - Math.cos(h.a) * 4.5, h.y - Math.sin(h.a) * 4.5, h.a, 4, .4, 31.2, 31.8, flat(POLICE_C));
   for (const r of [G.time * 25, G.time * 25 + Math.PI / 2]) obox(h.x, h.y, r, 10, .3, 32.3, 32.45, flat([30, 30, 34]));
+}
+// the view follows the car: once it has pointed into another 45° sector for a moment, that view is baked in the
+// background (a few ms per frame) and switched to when its tiles are ready
+let viewWant = 0, viewSince = 0, viewNext = -1;
+function followView() {
+  if (player.kind === 'foot' || Math.abs(speedOf(player)) < 2) { viewSince = performance.now(); return; }
+  const h = player.a + 3 * Math.PI / 4, k = ((Math.round(h / (Math.PI / 4)) % 8) + 8) % 8;
+  if (Math.abs(angDiff(h, VROT * Math.PI / 4)) < Math.PI / 8 + .3) { viewNext = -1; viewSince = performance.now(); return; } // still inside the current sector (+ hysteresis)
+  if (k !== viewWant) { viewWant = k; viewSince = performance.now(); }
+  if (performance.now() - viewSince > 350) viewNext = k;
+}
+function prebakeView(t0) {
+  if (viewNext < 0 || viewNext === VROT) return;
+  const keep = VROT; setView(viewNext);
+  const ox = Math.round(PX(camX, camY)) - (VW >> 1), oy = Math.round(PY(camX, camY, 0)) - (VH >> 1);
+  let left = 0;
+  for (const inf of tilesIn(ox, oy)) {
+    if (tiles.has(tkey(inf))) continue;
+    if (performance.now() - t0 > 7) { left++; continue; }
+    tiles.set(tkey(inf), makeTile(inf));
+  }
+  setView(keep);
+  if (!left) { setView(viewNext); viewNext = -1; }
 }
 function onScreen(x, y, m = 0) {
   const u = PX(x - camX, y - camY), v = PY(x - camX, y - camY, 0);
@@ -724,7 +826,9 @@ const fxy = (x, y, z = 0) => [PX(x, y) - FT.ox, PY(x, y, z) - FT.oy];
 const BG = pack(24, 46, 34);
 let uiQueue = [];
 function render() {
-  camX += (player.x + player.vx * .8 - camX) * .08; camY += (player.y + player.vy * .8 - camY) * .08;
+  const ahead = player.kind === 'foot' ? 0 : 8; // look ahead of the car
+  camX += (player.x + player.vx * .6 + Math.cos(player.a) * ahead - camX) * .08; camY += (player.y + player.vy * .6 + Math.sin(player.a) * ahead - camY) * .08;
+  followView();
   const sh = G.shake > .5 ? G.shake * .35 : 0;
   FT = { ox: Math.round(PX(camX, camY) + rnd(-sh, sh)) - (VW >> 1), oy: Math.round(PY(camX, camY, 0) + rnd(-sh, sh)) - (VH >> 1), w: VW, h: VH, col: pix, dep: zb, knd };
   pix.fill(BG); zb.fill(-Infinity); knd.fill(0);
@@ -732,22 +836,23 @@ function render() {
 
   // static city: visible tiles, baking missing ones nearest first (all at once if the screen would be mostly empty)
   const vis = [], need = [];
-  for (const inf of tileInfo().values()) {
-    const b = inf.b;
-    if (b[2] * PS < FT.ox || b[0] * PS > FT.ox + VW || b[3] * PS < FT.oy || b[1] * PS > FT.oy + VH) continue;
-    const t = tiles.get(inf.key);
-    if (t) { tiles.delete(inf.key); tiles.set(inf.key, t); vis.push(t); } else need.push(inf);
+  tileInfo();
+  for (const inf of tilesIn(FT.ox, FT.oy)) {
+    const k = tkey(inf), t = tiles.get(k);
+    if (t) { tiles.delete(k); tiles.set(k, t); vis.push(t); } else need.push(inf);
   }
+  const t0 = performance.now();
   if (need.length) {
     const cx = PX(camX, camY) / PS, cy = PY(camX, camY, 0) / PS, mid = b => Math.hypot((b[0] + b[2]) / 2 - cx, (b[1] + b[3]) / 2 - cy);
-    need.sort((a, b) => mid(a.b) - mid(b.b));
-    const t0 = performance.now(), all = vis.length < need.length;
+    need.sort((a, b) => mid(tileB(a)) - mid(tileB(b)));
+    const all = vis.length < need.length;
     for (const inf of need) {
       if (!all && performance.now() - t0 > 6) break;
-      const t = makeTile(inf); tiles.set(inf.key, t); vis.push(t);
+      const t = makeTile(inf); tiles.set(tkey(inf), t); vis.push(t);
     }
-    while (tiles.size > Math.max(60, vis.length + 10)) tiles.delete(tiles.keys().next().value);
   }
+  prebakeView(t0);
+  while (tiles.size > Math.max(90, vis.length * 2 + 10)) tiles.delete(tiles.keys().next().value);
   for (const t of vis) blit(t);
 
   // ground effects, then everything that moves
@@ -759,7 +864,14 @@ function render() {
     if (!b.train) { if (onScreen(b.x, b.y, 15)) bus3d(b.x, b.y, b.a, b.len, [242, 196, 0]); continue; }
     if (!onScreen(b.x, b.y, 35)) continue;
     const s = snapRail(b);
-    if (s) bus3d(s[0], s[1], s[2], b.len, b.name.startsWith('S') ? [181, 51, 46] : [242, 205, 0], b.name.startsWith('U') ? 7.05 : 0, true);
+    if (!s) continue;
+    // separate cars that follow the curves: U-Bahn small profile 4 × 12.8 m, S-Bahn 4 × 18 m (one Halbzug)
+    const u = b.name.startsWith('U'), cl = u ? 12.8 : 18, n = 4, gap = .9, total = n * cl + (n - 1) * gap, [, , , r, i, t, dir] = s;
+    const pos = d => d >= 0 ? railWalk(r, i, t, dir, d) : railWalk(r, i, t, -dir, -d); // + ahead, - behind the snap point
+    for (let k = 0; k < n; k++) {
+      const front = total / 2 - k * (cl + gap), A = pos(front), B = pos(front - cl);
+      bus3d((A[0] + B[0]) / 2, (A[1] + B[1]) / 2, Math.atan2(A[1] - B[1], A[0] - B[0]), cl, u ? [242, 205, 0] : [181, 51, 46], r.v ? 7.05 : 0, true);
+    }
   }
   for (const pd of peds) {
     if (!onScreen(pd.x, pd.y, 3)) continue;
@@ -835,27 +947,31 @@ function drawUI() {
 
 // ---------- minimap: the same iso orientation as the view, about 500 m across
 const mini = document.getElementById('mini'), mctx = mini.getContext('2d');
-let MINIBASE = null;
-const MB = 0.5; // base map pixels per metre
-function miniBase() {
-  const c = document.createElement('canvas'); c.width = Math.ceil(M.w * MB); c.height = Math.ceil(M.h * MB);
-  const g = c.getContext('2d'); g.scale(MB, MB); g.lineCap = g.lineJoin = 'round';
-  g.fillStyle = '#2a4634'; g.fillRect(0, 0, M.w, M.h);
-  g.fillStyle = '#3f6f45'; for (const a of M.green) { trace(g, a.p, 1); g.fill(); }
-  g.fillStyle = '#2f7c84'; for (const w of WATER) { trace(g, w.p, 1); g.fill(); }
-  g.fillStyle = '#1d3326'; for (const b of M.buildings) { trace(g, b.p, 1); g.fill(); }
-  for (const r of M.roads) if (r.car) { g.strokeStyle = ['primary', 'secondary', 'tertiary'].includes(r.t) ? '#e8d9a8' : '#a9b3a6'; g.lineWidth = Math.max(5, r.w * .8); trace(g, r.p); g.stroke(); }
-  return c;
+const MINI = new Map(), MB = 0.5, MC5 = 512; // base map: 0.5 px per metre, in 512 m chunks drawn on first use
+function miniBase(i, j) {
+  const k = i + ',' + j; let c = MINI.get(k);
+  if (c) return c;
+  const x0 = i * MC5, y0 = j * MC5, q = kind => query(kind, x0 - 10, y0 - 10, x0 + MC5 + 10, y0 + MC5 + 10);
+  c = document.createElement('canvas'); c.width = c.height = MC5 * MB;
+  const g = c.getContext('2d'); g.setTransform(MB, 0, 0, MB, -x0 * MB, -y0 * MB); g.lineCap = g.lineJoin = 'round';
+  g.fillStyle = '#2a4634'; g.fillRect(x0, y0, MC5, MC5);
+  g.fillStyle = '#3f6f45'; for (const a of q('green')) { trace(g, a.p, 1); g.fill(); }
+  g.fillStyle = '#2f7c84'; for (const w of q('water')) { trace(g, w.p, 1); g.fill(); }
+  g.fillStyle = '#1d3326'; for (const b of q('bs')) { trace(g, b.p, 1); g.fill(); }
+  for (const r of q('roads').sort((a, b) => a.rk - b.rk)) if (r.car) { g.strokeStyle = ['primary', 'secondary', 'tertiary'].includes(r.t) ? '#e8d9a8' : '#a9b3a6'; g.lineWidth = Math.max(5, r.w * .8); trace(g, r.p); g.stroke(); }
+  if (MINI.size > 160) MINI.delete(MINI.keys().next().value);
+  MINI.set(k, c); return c;
 }
 function drawMini() {
   const dpr = devicePixelRatio || 1, size = Math.round(mini.clientWidth * dpr);
   if (!size) return;
   if (mini.width !== size) mini.width = mini.height = size;
-  if (!MINIBASE) MINIBASE = miniBase();
-  const g = mctx, k = size / 500, a = k / R2, e = size / 2 - a * (player.x - player.y), f = size / 2 - a * SIN * (player.x + player.y);
-  const mp = (x, y) => [a * (x - y) + e, a * SIN * (x + y) + f];
+  const g = mctx, k = size / 500, e = size / 2 - k * (player.x * RX + player.y * RY), f = size / 2 - k * SIN * (player.x * DX + player.y * DY);
+  const mp = (x, y) => [k * (x * RX + y * RY) + e, k * SIN * (x * DX + y * DY) + f];
   g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#132a1e'; g.fillRect(0, 0, size, size);
-  g.setTransform(a, a * SIN, -a, a * SIN, e, f); g.drawImage(MINIBASE, 0, 0, M.w, M.h);
+  g.setTransform(k * RX, k * SIN * DX, k * RY, k * SIN * DY, e, f);
+  for (let i = Math.floor((player.x - 420) / MC5); i <= Math.floor((player.x + 420) / MC5); i++) for (let j = Math.floor((player.y - 420) / MC5); j <= Math.floor((player.y + 420) / MC5); j++)
+    if (i >= 0 && j >= 0 && i * MC5 < M.w && j * MC5 < M.h) g.drawImage(miniBase(i, j), i * MC5, j * MC5, MC5, MC5);
   g.setTransform(1, 0, 0, 1, 0, 0);
   const dot = (x, y, r, col, edge) => {
     let [px, py] = mp(x, y); const m = 8 * dpr;
@@ -864,7 +980,7 @@ function drawMini() {
     g.fillStyle = col; g.beginPath(); g.arc(px, py, r * dpr, 0, 7); g.fill(); g.strokeStyle = '#132a1e'; g.lineWidth = 1.5 * dpr; g.stroke();
   };
   if (G.wanted > 0 && G.time - G.lastSeen > 1.5) {
-    const [px, py] = mp(G.known.x, G.known.y), r = searchRadius() * a * R2;
+    const [px, py] = mp(G.known.x, G.known.y), r = searchRadius() * k;
     g.strokeStyle = 'rgba(110,160,255,.8)'; g.setLineDash([4 * dpr, 4 * dpr]); g.beginPath(); g.ellipse(px, py, r, r * SIN, 0, 0, 7); g.stroke(); g.setLineDash([]);
   }
   const j = G.job;
@@ -874,8 +990,94 @@ function drawMini() {
   for (const c of cars) if (c.kind === 'police') dot(c.x, c.y, 3, c.chase || c.stop || c.block ? ((G.time * 4 | 0) % 2 ? '#ff4a3a' : '#4a8cff') : '#4a8cff');
   if (G.heli) dot(G.heli.x, G.heli.y, 4, '#ffffff');
   // you: an arrow along your heading, turned into the minimap's iso frame
-  const [px, py] = mp(player.x, player.y), hx = Math.cos(player.a), hy = Math.sin(player.a), dx = hx - hy, dy = SIN * (hx + hy), dl = Math.hypot(dx, dy) || 1;
+  const [px, py] = mp(player.x, player.y), hx = Math.cos(player.a), hy = Math.sin(player.a), dx = hx * RX + hy * RY, dy = SIN * (hx * DX + hy * DY), dl = Math.hypot(dx, dy) || 1;
   g.setTransform(dpr, 0, 0, dpr, px, py); g.rotate(Math.atan2(dy / dl, dx / dl));
   g.fillStyle = '#f3efe4'; g.strokeStyle = '#132a1e'; g.lineWidth = 1.5;
   g.beginPath(); g.moveTo(7, 0); g.lineTo(-5, -5); g.lineTo(-2, 0); g.lineTo(-5, 5); g.closePath(); g.fill(); g.stroke();
+}
+
+// ---------- the big map (key M): north up, drag to move, wheel or +/- to zoom. The game is paused while it's open.
+const bigC = document.getElementById('bigmap'), bctx = bigC.getContext('2d');
+const BM = { open: false, x: 0, y: 0, s: .25 }; // centre (world metres), CSS px per metre
+let OVERVIEW = null;
+function overview() { // the whole city at 0.1 px per metre, drawn once
+  const k = .1, c = document.createElement('canvas'); c.width = Math.ceil(M.w * k); c.height = Math.ceil(M.h * k);
+  const g = c.getContext('2d'); g.scale(k, k); g.lineCap = g.lineJoin = 'round';
+  g.fillStyle = '#2a4634'; g.fillRect(0, 0, M.w, M.h);
+  g.fillStyle = '#3f6f45'; for (const a of M.green) { trace(g, a.p, 1); g.fill(); }
+  g.fillStyle = '#2f7c84'; for (const w of WATER) { trace(g, w.p, 1); g.fill(); }
+  g.fillStyle = '#1d3326'; for (const b of M.buildings) { trace(g, b.p, 1); g.fill(); }
+  for (const r of M.roads) if (r.car && r.t !== 'service') { const big = ['primary', 'secondary', 'tertiary'].includes(r.t); g.strokeStyle = big ? '#e8d9a8' : '#7d8a7e'; g.lineWidth = big ? 22 : 12; trace(g, r.p); g.stroke(); }
+  return c;
+}
+function toggleMap(open = !BM.open) {
+  BM.open = open; bigC.style.display = open ? 'block' : 'none';
+  if (open) { BM.x = player.x; BM.y = player.y; }
+}
+function zoomMap(f, cx = innerWidth / 2, cy = innerHeight / 2) { // keep the point under (cx, cy) in place
+  const wx = BM.x + (cx - innerWidth / 2) / BM.s, wy = BM.y + (cy - innerHeight / 2) / BM.s;
+  BM.s = clamp(BM.s * f, .05, 3);
+  BM.x = wx - (cx - innerWidth / 2) / BM.s; BM.y = wy - (cy - innerHeight / 2) / BM.s;
+}
+let drag = null;
+bigC.addEventListener('wheel', e => { e.preventDefault(); zoomMap(Math.exp(-e.deltaY * .0015), e.clientX, e.clientY); }, { passive: false });
+bigC.addEventListener('pointerdown', e => { drag = [e.clientX, e.clientY]; bigC.setPointerCapture(e.pointerId); });
+bigC.addEventListener('pointermove', e => { if (!drag) return; BM.x -= (e.clientX - drag[0]) / BM.s; BM.y -= (e.clientY - drag[1]) / BM.s; drag = [e.clientX, e.clientY]; });
+bigC.addEventListener('pointerup', () => { drag = null; });
+function drawBigMap() {
+  const dpr = devicePixelRatio || 1, W2 = Math.round(innerWidth * dpr), H2 = Math.round(innerHeight * dpr);
+  if (bigC.width !== W2 || bigC.height !== H2) { bigC.width = W2; bigC.height = H2; }
+  // arrow keys pan
+  const pan = 9 / BM.s;
+  if (keys.ArrowLeft || keys.KeyA) BM.x -= pan; if (keys.ArrowRight || keys.KeyD) BM.x += pan;
+  if (keys.ArrowUp || keys.KeyW) BM.y -= pan; if (keys.ArrowDown || keys.KeyS) BM.y += pan;
+  BM.x = clamp(BM.x, 0, M.w); BM.y = clamp(BM.y, 0, M.h);
+  const g = bctx, k = BM.s * dpr, e = W2 / 2 - BM.x * k, f = H2 / 2 - BM.y * k, sx = x => x * k + e, sy = y => y * k + f;
+  g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#132a1e'; g.fillRect(0, 0, W2, H2);
+  if (!OVERVIEW) OVERVIEW = overview();
+  g.imageSmoothingEnabled = true;
+  g.setTransform(k, 0, 0, k, e, f); g.drawImage(OVERVIEW, 0, 0, M.w, M.h);
+  if (BM.s > .3) { // close up: the detailed minimap chunks, a few new ones per frame
+    const x0 = BM.x - W2 / 2 / k, x1 = BM.x + W2 / 2 / k, y0 = BM.y - H2 / 2 / k, y1 = BM.y + H2 / 2 / k;
+    let made = 0;
+    for (let i = Math.max(0, Math.floor(x0 / MC5)); i <= Math.min(Math.ceil(M.w / MC5) - 1, Math.floor(x1 / MC5)); i++)
+      for (let j = Math.max(0, Math.floor(y0 / MC5)); j <= Math.min(Math.ceil(M.h / MC5) - 1, Math.floor(y1 / MC5)); j++) {
+        if (!MINI.has(i + ',' + j) && made++ > 3) continue;
+        g.drawImage(miniBase(i, j), i * MC5, j * MC5, MC5, MC5);
+      }
+  }
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  // street names from the road graph, each name about once per 300 px
+  if (BM.s > .45) {
+    g.font = `600 ${11 * dpr}px "JetBrains Mono", monospace`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineWidth = 3 * dpr; g.strokeStyle = '#132a1edd'; g.fillStyle = '#f3efe4';
+    const placed = [], x0 = BM.x - W2 / 2 / k, y0 = BM.y - H2 / 2 / k;
+    for (let i = Math.floor(x0 / GRID); i <= Math.floor((x0 + W2 / k) / GRID); i++) for (let j = Math.floor(y0 / GRID); j <= Math.floor((y0 + H2 / k) / GRID); j++)
+      for (const n of grid.get(i + ',' + j) || []) {
+        const name = M.names[M.nodeName[n]]; if (!name) continue;
+        const px = sx(NX(n)), py = sy(NY(n));
+        if (placed.some(p => (p[2] === name && Math.hypot(p[0] - px, p[1] - py) < 300 * dpr) || (Math.abs(p[0] - px) < 90 * dpr && Math.abs(p[1] - py) < 16 * dpr))) continue;
+        placed.push([px, py, name]); g.strokeText(name, px, py); g.fillText(name, px, py);
+        if (placed.length > 120) break;
+      }
+  }
+  const dot = (x, y, r, col, label) => {
+    const px = clamp(sx(x), 12 * dpr, W2 - 12 * dpr), py = clamp(sy(y), 12 * dpr, H2 - 12 * dpr);
+    g.fillStyle = col; g.strokeStyle = '#132a1e'; g.lineWidth = 2 * dpr; g.beginPath(); g.arc(px, py, r * dpr, 0, 7); g.fill(); g.stroke();
+    if (label) { g.font = `600 ${11 * dpr}px "JetBrains Mono", monospace`; g.textAlign = 'left'; g.lineWidth = 3 * dpr; g.strokeText(label, px + 9 * dpr, py); g.fillStyle = '#f3efe4'; g.fillText(label, px + 9 * dpr, py); }
+  };
+  const j = G.job;
+  if (j && j.stage === 'pickup') dot(j.pickup.x, j.pickup.y, 7, '#ffd60a', 'pick up: ' + j.pickup.name);
+  if (j && j.stage === 'deliver') dot(j.drop.x, j.drop.y, 7, '#9bd32d', 'deliver: ' + j.drop.name);
+  dot(shop.x, shop.y, 5, '#d64fa0', 'respray');
+  for (const c of cars) if (c.kind === 'police') dot(c.x, c.y, 4, '#4a8cff');
+  if (G.heli) dot(G.heli.x, G.heli.y, 5, '#ffffff');
+  g.setTransform(dpr, 0, 0, dpr, sx(player.x), sy(player.y)); g.rotate(player.a);
+  g.fillStyle = '#f3efe4'; g.strokeStyle = '#132a1e'; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(10, 0); g.lineTo(-7, -7); g.lineTo(-3, 0); g.lineTo(-7, 7); g.closePath(); g.fill(); g.stroke();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  // scale bar
+  const m = [50, 100, 250, 500, 1000, 2000, 5000].find(v => v * BM.s > 80) || 5000, L = m * k;
+  g.fillStyle = '#f3efe4'; g.fillRect(20 * dpr, H2 - 30 * dpr, L, 3 * dpr);
+  g.font = `600 ${11 * dpr}px "JetBrains Mono", monospace`; g.textAlign = 'left'; g.fillText(m >= 1000 ? m / 1000 + ' km' : m + ' m', 20 * dpr, H2 - 42 * dpr);
+  g.textAlign = 'right'; g.fillText('M / Esc close · drag or arrows move · wheel or +/− zoom · C centre on you', W2 - 20 * dpr, H2 - 30 * dpr);
 }

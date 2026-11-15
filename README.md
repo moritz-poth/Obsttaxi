@@ -1,8 +1,8 @@
 # Obst-Taxi
 
-Isometric pixel-art driving game on the real street map of Kreuzberg 36 (OpenStreetMap). Deliver exotic fruit, don't get caught.
+Isometric pixel-art driving game on the real street map of Berlin inside the S-Bahn ring (OpenStreetMap). Deliver exotic fruit, don't get caught.
 
-**Controls:** arrows/WASD drive (on foot: walk in screen directions) · Space handbrake / sprint · F get out, grab a car (yours, a parked one, or someone else's) · Y/N answer messages · R radio on/off · T next track · +/− zoom · P pixel detail (1–4, remembered).
+**Controls:** arrows/WASD drive (on foot: walk in screen directions) · Space handbrake / sprint · F get out, grab a car (yours, a parked one, or someone else's) · Y/N answer messages · R radio on/off · T next track · +/− zoom · P pixel detail (1–4, remembered) · M big map (drag/wheel, game paused). The view turns with the car in 45° steps so you always look ahead.
 
 **DirtyDave FM:** put music files into `music/`, run `node tools/playlist.mjs`, start the game. Tracks are not committed.
 
@@ -10,7 +10,7 @@ Isometric pixel-art driving game on the real street map of Kreuzberg 36 (OpenStr
 
 **Play:** open `index.html` in a browser. No server, no build step.
 
-**Rebuild the map:** `tools/fetch.sh` (downloads OSM data, LOR district shapes and the police crime atlas into `data/`), then `node tools/build-map.mjs` (writes `map.js`). Area and road widths are set at the top of `tools/build-map.mjs` and in `tools/query.overpassql`.
+**Rebuild the map:** `node tools/fetch.mjs` (downloads OSM data in tiles, LOR district shapes and the police crime atlas into `data/`; takes a while), then `node tools/build-map.mjs` (writes `map.js`). The area is `tools/area.json`; road widths are at the top of `tools/build-map.mjs`. The game builds collision, parked cars and sidewalks in 256 m chunks around the player, so the map can be big.
 
 **Test:** `node tools/playtest.mjs <outdir> "$PWD/index.html"` (headless Chrome, screenshots + rule checks).
 

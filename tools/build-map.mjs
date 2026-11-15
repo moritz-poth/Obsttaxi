@@ -1,9 +1,9 @@
 // Converts data/raw.json (Overpass "out geom") into map.js for the game.
-// Usage: node tools/build-map.mjs   (refetch raw.json with tools/fetch.sh)
+// Usage: node tools/build-map.mjs   (refetch raw.json with tools/fetch.mjs; the area is tools/area.json)
 import { readFileSync, writeFileSync } from 'node:fs';
 import assert from 'node:assert';
 
-const BBOX = { s: 52.49, w: 13.405, n: 52.5075, e: 13.447 };
+const { s, w, n, e } = JSON.parse(readFileSync(new URL('area.json', import.meta.url))), BBOX = { s, w, n, e };
 const LAT0 = (BBOX.s + BBOX.n) / 2;
 const KX = Math.cos(LAT0 * Math.PI / 180) * 111320, KY = 110540;
 const X = lon => Math.round((lon - BBOX.w) * KX * 10) / 10;
@@ -201,6 +201,41 @@ for (const f of bzr.features) {
     drugs: Math.round(row[cDrug] / berlin[cDrug] * 100) / 100, p: polys.map(pl => pl[0].flatMap(([lon, lat]) => [X(lon), Y(lat)])) });
 }
 out.crimeYear = sheets[0][1];
+
+// street trees: OSM puts many of them where the parking lane is, which the game draws as carriageway.
+// Move every tree standing on a car road out to the sidewalk, 1.4 m behind the kerb.
+export function kerbside(x, y, segs, grid, G) {
+  let best = null, bd = Infinity;
+  for (const k of grid.get((x / G | 0) + ',' + (y / G | 0)) || []) {
+    const [ax, ay, bx, by, w] = segs[k], dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2)), px = ax + dx * t, py = ay + dy * t, d = Math.hypot(x - px, y - py);
+    if (d < w / 2 + .3 && d - w / 2 < bd) { bd = d - w / 2; best = [px, py, d, w, dx, dy]; }
+  }
+  if (!best) return null;
+  const [px, py, d, w, dx, dy] = best, l = Math.hypot(dx, dy) || 1;
+  let nx = -dy / l, ny = dx / l; if (d > 1e-6 && (x - px) * nx + (y - py) * ny < 0) { nx = -nx; ny = -ny; }
+  return [Math.round((px + nx * (w / 2 + 1.4)) * 10) / 10, Math.round((py + ny * (w / 2 + 1.4)) * 10) / 10];
+}
+{
+  const G = 25, grid = new Map(), segs = [], CAR = ['primary', 'secondary', 'secondary_link', 'tertiary', 'unclassified', 'residential', 'living_street', 'service'];
+  for (const r of out.roads) if (CAR.includes(r.t) && !r.b) for (let i = 0; i + 3 < r.p.length; i += 2) {
+    const k = segs.length, [ax, ay, bx, by] = r.p.slice(i, i + 4); segs.push([ax, ay, bx, by, r.w]);
+    const m = r.w / 2 + 1;
+    for (let gx = Math.floor((Math.min(ax, bx) - m) / G); gx <= Math.floor((Math.max(ax, bx) + m) / G); gx++)
+      for (let gy = Math.floor((Math.min(ay, by) - m) / G); gy <= Math.floor((Math.max(ay, by) + m) / G); gy++) {
+        const key = gx + ',' + gy; if (!grid.has(key)) grid.set(key, []); grid.get(key).push(k);
+      }
+  }
+  let moved = 0;
+  for (let i = 0; i < out.trees.length; i += 3) {
+    const q = kerbside(out.trees[i], out.trees[i + 1], segs, grid, G);
+    if (q) { out.trees[i] = q[0]; out.trees[i + 1] = q[1]; moved++; }
+  }
+  console.log(`trees moved from the carriageway to the sidewalk: ${moved}`);
+  const tg = new Map([['0,0', [0]]]);
+  assert.deepEqual(kerbside(5, 2, [[0, 0, 10, 0, 11]], tg, 25), [5, 6.9]); // 2 m off the centre of an 11 m road -> 5.5 + 1.4
+  assert.equal(kerbside(5, 8, [[0, 0, 10, 0, 11]], tg, 25), null); // already on the sidewalk
+}
 
 // draw order: footpaths first, big roads on top
 const rank = r => ['footway', 'path', 'cycleway', 'steps', 'track', 'service', 'pedestrian', 'living_street', 'residential', 'unclassified', 'tertiary', 'secondary_link', 'secondary', 'primary'].indexOf(r.t);

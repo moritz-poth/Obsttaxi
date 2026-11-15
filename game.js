@@ -1,7 +1,10 @@
 'use strict';
-// Obst-Taxi: isometric fruit delivery on the real OSM street map of Kreuzberg 36.
+// Obst-Taxi: isometric fruit delivery on the real OSM street map of Berlin inside the S-Bahn ring.
 // World units are metres, x east, y south, origin at the north-west corner of the map.
+// The map is big: everything derived from it (collision raster, parked cars, sidewalks) is built in chunks near the player.
 const M = window.MAP, W = M.w, H = M.h;
+const LL = (lon, lat) => [(lon - M.geo.w) * M.geo.kx, (M.geo.n - lat) * M.geo.ky];
+const START = LL(13.41819, 52.49910), SHOP_AT = LL(13.43348, 52.50044); // Kottbusser Tor, the respray shop in the Wrangelkiez
 const $ = id => document.getElementById(id);
 const rnd = (a, b) => a + Math.random() * (b - a), pick = a => a[Math.random() * a.length | 0];
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -13,7 +16,7 @@ const angDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 const bbox = p => { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (let i = 0; i < p.length; i += 2) { a = Math.min(a, p[i]); c = Math.max(c, p[i]); b = Math.min(b, p[i + 1]); d = Math.max(d, p[i + 1]); } return [a, b, c, d]; };
 const trace = (g, p, close) => { g.beginPath(); g.moveTo(p[0], p[1]); for (let i = 2; i < p.length; i += 2) g.lineTo(p[i], p[i + 1]); if (close) g.closePath(); };
 const CAR_ROADS = new Set(['primary', 'secondary', 'secondary_link', 'tertiary', 'unclassified', 'residential', 'living_street', 'service']);
-M.roads.forEach(r => { r.bb = bbox(r.p); r.car = CAR_ROADS.has(r.t); });
+M.roads.forEach((r, i) => { r.bb = bbox(r.p); r.car = CAR_ROADS.has(r.t); r.rk = i; }); // rk: draw order (map.js sorts small roads first)
 M.rails.forEach(r => r.bb = bbox(r.p));
 M.green.forEach(g => g.bb = bbox(g.p));
 const WATER = M.water.map(p => ({ p, bb: bbox(p) }));
@@ -26,19 +29,68 @@ M.buildings.forEach((b, n) => {
   b.h += (hash(n + 11) - 0.5) * 1.6; // eaves never line up perfectly
 });
 
-// collision mask, 1 px per metre: 0 free, 1 building, 2 water
-const mask = (() => {
-  const mc = document.createElement('canvas'); mc.width = W; mc.height = H;
-  const m = mc.getContext('2d');
-  m.fillStyle = '#0f0'; WATER.forEach(w => { trace(m, w.p, 1); m.fill(); });
-  m.fillStyle = '#f00'; M.buildings.forEach(b => { trace(m, b.p, 1); m.fill(); });
-  m.globalCompositeOperation = 'destination-out'; m.lineCap = m.lineJoin = 'round';
-  M.roads.forEach(r => { if (r.car || r.b) { m.lineWidth = r.w; trace(m, r.p); m.stroke(); } });
-  const d = m.getImageData(0, 0, W, H).data, out = new Uint8Array(W * H);
-  for (let i = 0; i < out.length; i++) if (d[i * 4 + 3] > 100) out[i] = d[i * 4] > 100 ? 1 : 2;
+// ---------- spatial index: what sits in each 64 m cell, so nothing has to scan the whole city
+const IC = 64, IDX = new Map();
+function indexBox(kind, item, x0, y0, x1, y1) {
+  for (let i = Math.floor(x0 / IC); i <= Math.floor(x1 / IC); i++) for (let j = Math.floor(y0 / IC); j <= Math.floor(y1 / IC); j++) {
+    const k = i + ',' + j; let c = IDX.get(k);
+    if (!c) IDX.set(k, c = { roads: [], bs: [], green: [], water: [], rails: [], trees: [] });
+    const l = c[kind]; if (l[l.length - 1] !== item) l.push(item);
+  }
+}
+function indexLine(kind, item, p, m) { // segment by segment, so a long street doesn't fill its whole bounding box
+  for (let i = 0; i + 3 < p.length; i += 2) indexBox(kind, item, Math.min(p[i], p[i + 2]) - m, Math.min(p[i + 1], p[i + 3]) - m, Math.max(p[i], p[i + 2]) + m, Math.max(p[i + 1], p[i + 3]) + m);
+}
+let QS = 0;
+function query(kind, x0, y0, x1, y1) { // -> each item touching the box once (trees: indices into M.trees)
+  const out = [], s = ++QS;
+  for (let i = Math.floor(x0 / IC); i <= Math.floor(x1 / IC); i++) for (let j = Math.floor(y0 / IC); j <= Math.floor(y1 / IC); j++) {
+    const c = IDX.get(i + ',' + j); if (!c) continue;
+    for (const it of c[kind]) if (typeof it === 'number') out.push(it); else if (it._q !== s) { it._q = s; out.push(it); }
+  }
   return out;
-})();
-const cell = (x, y) => { x |= 0; y |= 0; return x < 0 || y < 0 || x >= W || y >= H ? 1 : mask[y * W + x]; };
+}
+M.roads.forEach(r => indexLine('roads', r, r.p, r.w / 2 + 6));
+M.buildings.forEach(b => indexBox('bs', b, ...b.bb));
+M.green.forEach(g => indexBox('green', g, ...g.bb));
+WATER.forEach(w => indexBox('water', w, ...w.bb));
+M.rails.forEach(r => indexLine('rails', r, r.p, 6));
+for (let i = 0; i < M.trees.length; i += 3) indexBox('trees', i, M.trees[i], M.trees[i + 1], M.trees[i], M.trees[i + 1]);
+const BMAXH = M.buildings.reduce((m, b) => Math.max(m, b.h), 0);
+
+// ---------- collision raster, 1 px per metre, in 256 m chunks built on first use:
+// mask 0 free, 1 building, 2 water, 3 parked car; road 1 where cars drive
+const CK = 256, CHUNKS = new Map(), RCV = document.createElement('canvas'); RCV.width = RCV.height = CK;
+const rg = RCV.getContext('2d', { willReadFrequently: true });
+function raster(ci, cj) {
+  const key = ci + ',' + cj; let c = CHUNKS.get(key);
+  if (c) return c;
+  const x0 = ci * CK, y0 = cj * CK, g = rg, q = kind => query(kind, x0 - 20, y0 - 20, x0 + CK + 20, y0 + CK + 20);
+  const roads = q('roads');
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = 'source-over'; g.clearRect(0, 0, CK, CK); g.setTransform(1, 0, 0, 1, -x0, -y0);
+  g.fillStyle = '#0f0'; q('water').forEach(w => { trace(g, w.p, 1); g.fill(); });
+  g.fillStyle = '#f00'; q('bs').forEach(b => { trace(g, b.p, 1); g.fill(); });
+  g.globalCompositeOperation = 'destination-out'; g.lineCap = g.lineJoin = 'round';
+  roads.forEach(r => { if (r.car || r.b) { g.lineWidth = r.w; trace(g, r.p); g.stroke(); } });
+  let d = g.getImageData(0, 0, CK, CK).data;
+  const mask = new Uint8Array(CK * CK), road = new Uint8Array(CK * CK);
+  for (let i = 0; i < mask.length; i++) if (d[i * 4 + 3] > 100) mask[i] = d[i * 4] > 100 ? 1 : 2;
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = 'source-over'; g.clearRect(0, 0, CK, CK); g.setTransform(1, 0, 0, 1, -x0, -y0);
+  g.strokeStyle = '#fff'; roads.forEach(r => { if (r.car) { g.lineWidth = r.w; trace(g, r.p); g.stroke(); } });
+  d = g.getImageData(0, 0, CK, CK).data;
+  for (let i = 0; i < road.length; i++) road[i] = d[i * 4 + 3] > 128 ? 1 : 0;
+  c = { mask, road, x0, y0 }; CHUNKS.set(key, c);
+  // what changed since the city was built: parked cars (minus stolen ones), closed roads
+  for (let ti = Math.floor((x0 - 3) / 64); ti <= Math.floor((x0 + CK + 3) / 64); ti++) for (let tj = Math.floor((y0 - 3) / 64); tj <= Math.floor((y0 + CK + 3) / 64); tj++)
+    for (const k of PGRID.get(ti + ',' + tj) || []) if (PARKED[k + 3] >= 0) parkedPx(k, (px, py) => { const l = (py - y0) * CK + px - x0; if (px >= x0 && py >= y0 && px < x0 + CK && py < y0 + CK && !mask[l]) mask[l] = 3; });
+  for (const w of WORKS) if (w.closed && w.bb[2] > x0 - 5 && w.bb[0] < x0 + CK + 5 && w.bb[3] > y0 - 5 && w.bb[1] < y0 + CK + 5) wallPx(w, (px, py) => { if (px >= x0 && py >= y0 && px < x0 + CK && py < y0 + CK) mask[(py - y0) * CK + px - x0] = 1; });
+  return c;
+}
+const cell = (x, y) => { x |= 0; y |= 0; return x < 0 || y < 0 || x >= W || y >= H ? 1 : raster(x / CK | 0, y / CK | 0).mask[(y % CK) * CK + x % CK]; };
+function setCell(x, y, v, only) { // only chunks already built; the others pick the change up when they are built
+  const c = CHUNKS.get((x / CK | 0) + ',' + (y / CK | 0)), i = (y % CK) * CK + x % CK;
+  if (c && x >= 0 && y >= 0 && (only === undefined || c.mask[i] === only)) c.mask[i] = v;
+}
 function los(ax, ay, bx, by) {
   const n = Math.ceil(dist(ax, ay, bx, by) / 2);
   for (let i = 1; i < n; i++) if (cell(ax + (bx - ax) * i / n, ay + (by - ay) * i / n) === 1) return false;
@@ -101,34 +153,45 @@ console.assert(inPoly([0, 0, 10, 0, 10, 10, 0, 10], 5, 5) && !inPoly([0, 0, 10, 
 
 // ---------- parked cars along the kerbs: Berlin side streets are lined nose to tail on both sides.
 // Static: baked into the ground tiles and stamped into the collision mask (value 3, doesn't block line of sight).
-const NOPARK = new Set(), noPark = (x, y, r) => { for (let i = -r; i <= r; i += 4) for (let j = -r; j <= r; j += 4) NOPARK.add(((x + i) / 4 | 0) + ',' + ((y + j) / 4 | 0)); };
-for (let n = 0; n < N; n++) if (M.adj[n].length >= 3) noPark(NX(n), NY(n), 12);
-for (const n of M.signals) noPark(NX(n), NY(n), 10);
-for (let i = 0; i < M.crossings.length; i += 2) noPark(NX(M.crossings[i]), NY(M.crossings[i]), 6);
-for (let i = 0; i < M.stops.length; i += 2) noPark(M.stops[i], M.stops[i + 1], 12);
-noPark(894, 928, 30); noPark(1930, 780, 20); // start (Kotti) and the respray shop
-const PARKED = [], PGRID = new Map(); // x, y, angle, colour seed
-for (const r of M.roads) {
-  if (!r.pk || !(r.pk[0] || r.pk[1])) continue;
-  const p = r.p, off = r.w / 2 - 1.15;
-  for (let i = 0; i + 3 < p.length; i += 2) {
-    const dx = p[i + 2] - p[i], dy = p[i + 3] - p[i + 1], L = Math.hypot(dx, dy); if (L < 9) continue;
-    const ux = dx / L, uy = dy / L, a = Math.atan2(dy, dx);
-    for (const side of [-1, 1]) if (r.pk[side < 0 ? 0 : 1]) for (let d = 3.2; d < L - 3.2; d += 5.3 + hash(i * 7 + d) * 1.4) {
-      const x = p[i] + ux * d - uy * off * side, y = p[i + 1] + uy * d + ux * off * side, seed = x * 13.1 + y * 7.7;
-      if (hash(seed) < 0.12 || NOPARK.has((x / 4 | 0) + ',' + (y / 4 | 0))) continue;
-      if (cell(x, y) || cell(x + ux * 2.3, y + uy * 2.3) || cell(x - ux * 2.3, y - uy * 2.3) || nearestEdge(x, y, off - 0.6)) continue;
-      const k = PARKED.length; PARKED.push(x, y, a + (side > 0 ? 0 : Math.PI), hash(seed + 2));
-      const t = (x / 64 | 0) + ',' + (y / 64 | 0); if (!PGRID.has(t)) PGRID.set(t, []); PGRID.get(t).push(k);
+const NGRID = new Map(), gridAdd = (g, x, y, v, sz) => { const k = (x / sz | 0) + ',' + (y / sz | 0); if (!g.has(k)) g.set(k, []); g.get(k).push(v); };
+for (let n = 0; n < N; n++) gridAdd(NGRID, NX(n), NY(n), n, 20);
+const CROSSN = new Set(); for (let i = 0; i < M.crossings.length; i += 2) CROSSN.add(M.crossings[i]);
+const SGRID = new Map(); for (let i = 0; i < M.stops.length; i += 2) gridAdd(SGRID, M.stops[i], M.stops[i + 1], i, 20);
+function noPark(x, y) { // junctions, lights, crossings, bus stops, the start and the respray shop stay clear
+  if (Math.abs(x - START[0]) < 30 && Math.abs(y - START[1]) < 30 || Math.abs(x - SHOP_AT[0]) < 20 && Math.abs(y - SHOP_AT[1]) < 20) return true;
+  for (let i = (x / 20 | 0) - 1; i <= (x / 20 | 0) + 1; i++) for (let j = (y / 20 | 0) - 1; j <= (y / 20 | 0) + 1; j++) {
+    for (const n of NGRID.get(i + ',' + j) || []) {
+      const d = Math.max(Math.abs(NX(n) - x), Math.abs(NY(n) - y));
+      if (d < 12 && M.adj[n].length >= 3 || d < 10 && SIG.has(n) || d < 6 && CROSSN.has(n)) return true;
+    }
+    for (const k of SGRID.get(i + ',' + j) || []) if (Math.max(Math.abs(M.stops[k] - x), Math.abs(M.stops[k + 1] - y)) < 12) return true;
+  }
+  return false;
+}
+const PARKED = [], PGRID = new Map(); // x, y, angle, colour seed (-1 once stolen); PGRID by 64 m tile
+function parkedPx(k, f) { // the 1 m cells under a parked car
+  const x = PARKED[k], y = PARKED[k + 1], a = PARKED[k + 2], c = Math.cos(a), s = Math.sin(a);
+  for (let l = -2.2; l <= 2.2; l += 0.5) for (let w = -0.9; w <= 0.9; w += 0.45) f(x + c * l - s * w | 0, y + s * l + c * w | 0);
+}
+function parkChunk(x0, y0) { // the same cars every time: positions come from a hash along each kerb
+  const added = [];
+  for (const r of query('roads', x0, y0, x0 + CK, y0 + CK)) {
+    if (!r.pk || !(r.pk[0] || r.pk[1])) continue;
+    const p = r.p, off = r.w / 2 - 1.15;
+    for (let i = 0; i + 3 < p.length; i += 2) {
+      const dx = p[i + 2] - p[i], dy = p[i + 3] - p[i + 1], L = Math.hypot(dx, dy); if (L < 9) continue;
+      const ux = dx / L, uy = dy / L, a = Math.atan2(dy, dx);
+      for (const side of [-1, 1]) if (r.pk[side < 0 ? 0 : 1]) for (let d = 3.2; d < L - 3.2; d += 5.3 + hash(i * 7 + d) * 1.4) {
+        const x = p[i] + ux * d - uy * off * side, y = p[i + 1] + uy * d + ux * off * side, seed = x * 13.1 + y * 7.7;
+        if (x < x0 || y < y0 || x >= x0 + CK || y >= y0 + CK || hash(seed) < 0.12 || noPark(x, y)) continue;
+        if ([cell(x, y), cell(x + ux * 2.3, y + uy * 2.3), cell(x - ux * 2.3, y - uy * 2.3)].some(v => v && v !== 3) || nearestEdge(x, y, off - 0.6)) continue;
+        const k = PARKED.length; PARKED.push(x, y, a + (side > 0 ? 0 : Math.PI), hash(seed + 2));
+        gridAdd(PGRID, x, y, k, 64); added.push(k);
+      }
     }
   }
-}
-for (let k = 0; k < PARKED.length; k += 4) {
-  const [x, y, a] = PARKED.slice(k, k + 3), c = Math.cos(a), s = Math.sin(a);
-  for (let l = -2.2; l <= 2.2; l += 0.5) for (let w = -0.9; w <= 0.9; w += 0.45) {
-    const px = x + c * l - s * w | 0, py = y + s * l + c * w | 0;
-    if (px >= 0 && py >= 0 && px < W && py < H && !mask[py * W + px]) mask[py * W + px] = 3;
-  }
+  for (const k of added) stampParked(k, 3);
+  return added;
 }
 const MAIN = (() => { // largest connected component, so nobody spawns on an island
   const comp = new Int32Array(N).fill(-1); let best = [], c = 0;
@@ -151,20 +214,25 @@ function nearestNode(x, y) {
       for (const n of grid.get(i + ',' + j) || []) { const d = dist(x, y, NX(n), NY(n)); if (d < bd) { bd = d; best = n; } }
   return best;
 }
-function dijkstra(src) {
+function dijkstra(src, maxD = 3000) { // road distances from src, out to maxD metres
   const d = new Float64Array(N).fill(Infinity), heap = [[0, src]]; d[src] = 0;
   const push = e => { heap.push(e); let i = heap.length - 1; while (i) { const p = (i - 1) >> 1; if (heap[p][0] <= e[0]) break; heap[i] = heap[p]; i = p; } heap[i] = e; };
   const pop = () => { const top = heap[0], e = heap.pop(); if (heap.length) { let i = 0; for (;;) { let c = 2 * i + 1; if (c >= heap.length) break; if (c + 1 < heap.length && heap[c + 1][0] < heap[c][0]) c++; if (heap[c][0] >= e[0]) break; heap[i] = heap[c]; i = c; } heap[i] = e; } return top; };
   while (heap.length) {
     const [du, u] = pop(); if (du > d[u]) continue;
-    for (const v of M.adj[u]) { if (CLOSED.has(ekey(u, v))) continue; const nd = du + dist(NX(u), NY(u), NX(v), NY(v)); if (nd < d[v]) { d[v] = nd; push([nd, v]); } }
+    for (const v of M.adj[u]) { if (CLOSED.has(ekey(u, v))) continue; const nd = du + dist(NX(u), NY(u), NX(v), NY(v)); if (nd < d[v] && nd < maxD) { d[v] = nd; push([nd, v]); } }
   }
   return d;
 }
 const place = n => ({ x: NX(n), y: NY(n), name: M.names[M.nodeName[n]] || 'a backyard' });
-function randNode(x, y, minR, maxR, offscreen, pool = MAIN) {
-  for (let t = 0; t < 200; t++) {
-    const n = pick(pool), d = dist(x, y, NX(n), NY(n));
+const POOLGRID = new Map([[MAIN, grid]]);
+function randNode(x, y, minR, maxR, offscreen, pool = MAIN) { // a random point in the ring, then a node in its grid cell
+  let g = POOLGRID.get(pool);
+  if (!g) { g = new Map(); pool.forEach(n => gridAdd(g, NX(n), NY(n), n, GRID)); POOLGRID.set(pool, g); }
+  for (let t = 0; t < 300; t++) {
+    const an = rnd(0, 2 * Math.PI), rr = Math.sqrt(rnd(minR * minR, maxR * maxR)), list = g.get(((x + Math.cos(an) * rr) / GRID | 0) + ',' + ((y + Math.sin(an) * rr) / GRID | 0));
+    if (!list) continue;
+    const n = pick(list), d = dist(x, y, NX(n), NY(n));
     if (d < minR || d > maxR || (offscreen && onScreen(NX(n), NY(n), 25))) continue;
     if (!offscreen && (M.nodeName[n] < 0 || NX(n) < 80 || NY(n) < 80 || NX(n) > W - 80 || NY(n) > H - 80)) continue;
     return n;
@@ -222,7 +290,7 @@ function makeCar(kind, from, to) {
   const c = { kind, police: kind === 'police', x: NX(from), y: NY(from), a: Math.atan2(NY(to) - NY(from), NX(to) - NX(from)), vx: 0, vy: 0,
     from, to, next: null, stuck: 0, rev: 0, chase: false, busy: kind === 'police' && Math.random() < 0.25, shift: 0, shiftT: 0, waitT: 0, yieldT: 0,
     lane: Math.random() < 0.6 ? 0 : Math.random() < 0.7 ? 1 : 2, color: kind === 'police' ? '#e2e6ec' : pick(PAINT) };
-  if (kind === 'bike') { c.lane = 0; c.vmax = rnd(4, 6.5); c.rebel = Math.random() < 0.3; c.ph = 0; c.color = pick(CLOTHES); c.hair = pick(HAIR); }
+  if (kind === 'bike') { c.lane = 0; c.vmax = rnd(4, 6.5); c.rebel = Math.random() < 0.3; c.ph = 0; c.color = pick(CLOTHES); c.hair = pick(HAIR); c.frame = pick(['#2b5c8a', '#a8322d', '#1d1d1f', '#e2e2dc', '#3e7a46', '#d9a521', '#7a7f86']); }
   return c;
 }
 // lane centre, metres right of the centre line. k = 0 is the rightmost lane.
@@ -348,7 +416,6 @@ function updateTraffic(c, dt) {
   if (bike) c.ph += Math.abs(sp) * dt * 2;
 }
 // ---------- live data: VIZ Berlin roadworks, BVG vehicles (both CORS-enabled, game runs fine without them)
-const LL = (lon, lat) => [(lon - M.geo.w) * M.geo.kx, (M.geo.n - lat) * M.geo.ky];
 const WORKS = []; // { closed, pts:[x,y,...], bb }
 const inWorks = (x, y) => WORKS.some(w => x > w.bb[0] - 12 && x < w.bb[2] + 12 && y > w.bb[1] - 12 && y < w.bb[3] + 12 && segDist(w.pts, x, y) < 10);
 function segDist(p, x, y) {
@@ -361,6 +428,17 @@ function segDist(p, x, y) {
   return best;
 }
 console.assert(Math.abs(segDist([0, 0, 10, 0], 5, 3) - 3) < 1e-9, 'segDist');
+function wallPx(w, f) { // the 1 m cells of a closed stretch, 7 m wide
+  const p = w.pts;
+  for (let i = 0; i + 3 < p.length; i += 2) {
+    const n = Math.ceil(dist(p[i], p[i + 1], p[i + 2], p[i + 3]));
+    for (let s = 0; s <= n; s++) {
+      const x = p[i] + (p[i + 2] - p[i]) * s / n, y = p[i + 1] + (p[i + 3] - p[i + 1]) * s / n;
+      if (dist(x, y, w.px, w.py) < 15) continue;
+      for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) f(x + a | 0, y + b | 0);
+    }
+  }
+}
 const LIVE = { works: null, bvg: null };
 async function loadWorks() {
   try {
@@ -378,32 +456,30 @@ async function loadWorks() {
       }
     }
     for (const w of WORKS) if (w.closed) {
-      // full closure: barrier across both ends, the stretch between is a building site (solid)
-      for (const e of EDGES) if (segDist(w.pts, (NX(e.a) + NX(e.b)) / 2, (NY(e.a) + NY(e.b)) / 2) < 4) CLOSED.add(ekey(e.a, e.b));
-      const p = w.pts;
-      for (let i = 0; i + 3 < p.length; i += 2) {
-        const n = Math.ceil(dist(p[i], p[i + 1], p[i + 2], p[i + 3]));
-        for (let s = 0; s <= n; s++) {
-          const x = p[i] + (p[i + 2] - p[i]) * s / n, y = p[i + 1] + (p[i + 3] - p[i + 1]) * s / n;
-          if (dist(x, y, player.x, player.y) < 15) continue; // never wall the player in
-          for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) if (x + a >= 0 && y + b >= 0 && x + a < W && y + b < H) mask[(y + b | 0) * W + (x + a | 0)] = 1;
-        }
+      // full closure: the edges along it are closed, the stretch itself is a building site (solid)
+      w.px = player.x; w.py = player.y; // never wall the player in
+      for (let k = 0; k + 3 < w.pts.length; k += 2) for (let t = 0; t <= 1; t += 0.1) {
+        const x = w.pts[k] + (w.pts[k + 2] - w.pts[k]) * t, y = w.pts[k + 1] + (w.pts[k + 3] - w.pts[k + 1]) * t;
+        for (const e of EGRID.get((x / EG | 0) + ',' + (y / EG | 0)) || []) if (segDist(w.pts, (NX(e.a) + NX(e.b)) / 2, (NY(e.a) + NY(e.b)) / 2) < 4) CLOSED.add(ekey(e.a, e.b));
       }
     }
+    CHUNKS.clear(); // rebuilt with the closures in them
     LIVE.works = WORKS.length; tiles.clear();
-    if (WORKS.length) msg(null, `🚧 ${WORKS.length} live roadworks today: ${[...new Set(WORKS.map(w => w.street.replace(/ \(.*/, '')))].join(', ')}`);
+    const near = [...new Set(WORKS.slice().sort((a, b) => segDist(a.pts, player.x, player.y) - segDist(b.pts, player.x, player.y)).map(w => w.street.replace(/ \(.*/, '')))].slice(0, 5);
+    if (WORKS.length) msg(null, `🚧 ${WORKS.length} live roadworks today. Near you: ${near.join(', ')}`);
   } catch (e) { LIVE.works = 'offline'; }
 }
 // BVG radar (v6.bvg.transport.rest, community API on BVG's HAFAS): real buses and U-Bahn trains, polled every 15 s.
-// Buses are solid; U1/U3 run on the Hochbahn viaduct; U8 is underground and not drawn.
+// Buses are solid; U1/U2/U3 are drawn where they run on a viaduct (snapRail finds none when they're underground).
 const buses = [], POLL = 15;
 async function pollBVG() {
   try {
-    const g = M.geo, u = `https://v6.bvg.transport.rest/radar?north=${g.n}&west=${g.w}&south=${g.s}&east=${g.e}&results=256&frames=0&polylines=false`;
+    const lat = M.geo.n - player.y / M.geo.ky, lon = M.geo.w + player.x / M.geo.kx; // about 3 km round the player
+    const u = `https://v6.bvg.transport.rest/radar?north=${lat + .014}&west=${lon - .022}&south=${lat - .014}&east=${lon + .022}&results=256&frames=0&polylines=false`;
     const d = await (await fetch(u)).json(), seen = new Set();
     for (const m of d.movements) {
       const prod = m.line.product, name = m.line.name;
-      if (prod === 'subway' && !['U1', 'U3'].includes(name)) continue;
+      if (prod === 'subway' && !['U1', 'U2', 'U3'].includes(name)) continue; // the lines with stretches on a viaduct
       if (!['bus', 'subway', 'suburban', 'tram'].includes(prod)) continue;
       const id = m.tripId; seen.add(id);
       let [x, y] = LL(m.location.longitude, m.location.latitude);
@@ -442,17 +518,14 @@ function updateBuses(dt) {
 
 // ---------- pedestrians: a walking graph over footways and both sidewalks of every street.
 // Sidewalks stop short of the carriageway; a road is only crossed at a mapped crossing.
-const ROADMASK = (() => { // 1 px per metre: 1 where cars drive
-  const mc = document.createElement('canvas'); mc.width = W; mc.height = H;
-  const m = mc.getContext('2d'); m.strokeStyle = '#fff'; m.lineCap = m.lineJoin = 'round';
-  M.roads.forEach(r => { if (r.car) { m.lineWidth = r.w; trace(m, r.p); m.stroke(); } });
-  const d = m.getImageData(0, 0, W, H).data, out = new Uint8Array(W * H);
-  for (let i = 0; i < out.length; i++) out[i] = d[i * 4 + 3] > 128 ? 1 : 0;
-  return out;
-})();
-const onRoad = (x, y) => { x |= 0; y |= 0; return x >= 0 && y >= 0 && x < W && y < H && ROADMASK[y * W + x] === 1; };
-const CROSS = []; for (let i = 0; i < M.crossings.length; i += 2) CROSS.push(NX(M.crossings[i]), NY(M.crossings[i]), M.crossings[i + 1]);
-const nearCrossing = (x, y, r) => { for (let i = 0; i < CROSS.length; i += 3) if (Math.abs(CROSS[i] - x) < r && Math.abs(CROSS[i + 1] - y) < r) return true; return false; };
+const onRoad = (x, y) => { x |= 0; y |= 0; return x >= 0 && y >= 0 && x < W && y < H && raster(x / CK | 0, y / CK | 0).road[(y % CK) * CK + x % CK] === 1; };
+const CROSS = [], CGRID = new Map();
+for (let i = 0; i < M.crossings.length; i += 2) { gridAdd(CGRID, NX(M.crossings[i]), NY(M.crossings[i]), CROSS.length, 20); CROSS.push(NX(M.crossings[i]), NY(M.crossings[i]), M.crossings[i + 1]); }
+const nearCrossing = (x, y, r) => { // r up to 20 m
+  for (let i = (x / 20 | 0) - 1; i <= (x / 20 | 0) + 1; i++) for (let j = (y / 20 | 0) - 1; j <= (y / 20 | 0) + 1; j++)
+    for (const k of CGRID.get(i + ',' + j) || []) if (Math.abs(CROSS[k] - x) < r && Math.abs(CROSS[k + 1] - y) < r) return true;
+  return false;
+};
 const walkable = (x, y, cross) => { const c = cell(x, y); return c !== 1 && c !== 2 && (!onRoad(x, y) || (cross && nearCrossing(x, y, 7))); };
 function offsetLine(p, d) {
   const out = [], n = p.length / 2;
@@ -491,42 +564,70 @@ function clearWalk(ax, ay, bx, by) {
   for (let k = 1; k < n; k++) if (!walkable(ax + (bx - ax) * k / n, ay + (by - ay) * k / n, false)) return false;
   return true;
 }
-function walkLine(p, cross) { // a line becomes a chain of nodes; it breaks wherever it can't be walked
+function walkLine(p, cross, x0, y0) { // a line becomes a chain of nodes; it breaks wherever it can't be walked or leaves the chunk
   const q = densify(p, 4);
   let prev = -1;
   for (let i = 0; i < q.length; i += 2) {
+    if (q[i] < x0 || q[i + 1] < y0 || q[i] >= x0 + CK || q[i + 1] >= y0 + CK) { prev = -1; continue; }
     if (!walkable(q[i], q[i + 1], cross) || (prev >= 0 && !walkable((q[i] + PN[2 * prev]) / 2, (q[i + 1] + PN[2 * prev + 1]) / 2, cross))) { prev = -1; continue; }
     const n = pnode(q[i], q[i + 1]);
     if (prev >= 0) plink(prev, n);
     prev = n;
   }
 }
-for (const r of M.roads) {
-  if (!r.car && ['footway', 'path', 'pedestrian', 'steps'].includes(r.t)) walkLine(r.p, true);
-  else if (r.car && r.t !== 'service' && !r.b) for (const d of [1, -1]) walkLine(offsetLine(r.p, d * (r.w / 2 + 1.9)), false);
-}
-for (let n = 0; n < PADJ.length; n++) if (PADJ[n].length <= 1) { // loose ends join a nearby line round the corner
-  const x = PN[2 * n], y = PN[2 * n + 1];
-  let best = -1, bd = 5;
-  for (const m of walkNear(x, y, 5)) {
-    if (m === n || PADJ[n].includes(m) || (PADJ[n][0] !== undefined && PADJ[PADJ[n][0]].includes(m))) continue;
-    const d = dist(x, y, PN[2 * m], PN[2 * m + 1]);
-    if (d < bd && clearWalk(x, y, PN[2 * m], PN[2 * m + 1])) { bd = d; best = m; }
-  }
-  if (best >= 0) plink(n, best);
-}
-for (let i = 0; i < CROSS.length; i += 3) { // every mapped crossing links the sidewalks on both sides
+const PENDX = new Set(); // crossings still missing a sidewalk on one side (its chunk isn't built yet)
+function linkCrossing(i) { // a mapped crossing links the sidewalks on both sides
   const x = CROSS[i], y = CROSS[i + 1], r = nearestEdge(x, y, 3);
-  if (!r) continue;
+  if (!r) return true;
   const e = r.e, a = Math.atan2(NY(e.b) - NY(e.a), NX(e.b) - NX(e.a)), h = e.w / 2 + 1.9, sx = -Math.sin(a) * h, sy = Math.cos(a) * h;
   const ends = [[x + sx, y + sy], [x - sx, y - sy]].map(([px, py]) => {
     let best = -1, bd = 4.5;
     for (const m of walkNear(px, py, 4.5)) { const d = dist(px, py, PN[2 * m], PN[2 * m + 1]); if (d < bd) { bd = d; best = m; } }
     return best;
   });
-  if (ends[0] < 0 || ends[1] < 0) continue;
+  if (ends[0] < 0 || ends[1] < 0) return false;
   const mid = pnode(x, y); plink(ends[0], mid); plink(mid, ends[1]);
   if (CROSS[i + 2] === 1) ZEBRA_NODES.add(mid);
+  return true;
+}
+function walkChunk(x0, y0) {
+  const first = PADJ.length;
+  for (const r of query('roads', x0, y0, x0 + CK, y0 + CK)) {
+    if (!r.car && ['footway', 'path', 'pedestrian', 'steps'].includes(r.t)) walkLine(r.p, true, x0, y0);
+    else if (r.car && r.t !== 'service' && !r.b) for (const d of [1, -1]) walkLine(offsetLine(r.p, d * (r.w / 2 + 1.9)), false, x0, y0);
+  }
+  for (let n = first; n < PADJ.length; n++) if (PADJ[n].length <= 1) { // loose ends join a nearby line round the corner or across the chunk edge
+    const x = PN[2 * n], y = PN[2 * n + 1];
+    let best = -1, bd = 5;
+    for (const m of walkNear(x, y, 5)) {
+      if (m === n || PADJ[n].includes(m) || (PADJ[n][0] !== undefined && PADJ[PADJ[n][0]].includes(m))) continue;
+      const d = dist(x, y, PN[2 * m], PN[2 * m + 1]);
+      if (d < bd && clearWalk(x, y, PN[2 * m], PN[2 * m + 1])) { bd = d; best = m; }
+    }
+    if (best >= 0) plink(n, best);
+  }
+  for (let i = (x0 / 20 | 0); i < (x0 + CK) / 20; i++) for (let j = (y0 / 20 | 0); j < (y0 + CK) / 20; j++)
+    for (const k of CGRID.get(i + ',' + j) || []) if (CROSS[k] >= x0 && CROSS[k + 1] >= y0 && CROSS[k] < x0 + CK && CROSS[k + 1] < y0 + CK) PENDX.add(k);
+  for (const k of PENDX) if (Math.abs(CROSS[k] - x0 - CK / 2) < CK && Math.abs(CROSS[k + 1] - y0 - CK / 2) < CK && linkCrossing(k)) PENDX.delete(k);
+}
+// chunk stage 2, once per chunk: parked cars, then sidewalks (they keep clear of the cars' cells only via the raster)
+const DONE = new Set();
+function ensureChunk(ci, cj) {
+  const k = ci + ',' + cj;
+  if (DONE.has(k) || ci < 0 || cj < 0 || ci * CK >= W || cj * CK >= H) return false;
+  DONE.add(k);
+  const added = parkChunk(ci * CK, cj * CK);
+  if (typeof tileAddParked === 'function') tileAddParked(added);
+  walkChunk(ci * CK, cj * CK);
+  return true;
+}
+function ensureAround(x, y, r, budget = Infinity) { // nearest chunks first; rasters far away are dropped (rebuilt on demand)
+  const t0 = performance.now(), list = [];
+  for (let i = Math.floor((x - r) / CK); i <= Math.floor((x + r) / CK); i++) for (let j = Math.floor((y - r) / CK); j <= Math.floor((y + r) / CK); j++)
+    if (!DONE.has(i + ',' + j)) list.push([i, j, dist(x, y, (i + .5) * CK, (j + .5) * CK)]);
+  list.sort((a, b) => a[2] - b[2]);
+  for (const [i, j] of list) { if (performance.now() - t0 > budget) break; ensureChunk(i, j); }
+  if (CHUNKS.size > 200) for (const [k, c] of CHUNKS) if (Math.abs(c.x0 + CK / 2 - x) > 1200 || Math.abs(c.y0 + CK / 2 - y) > 1200) CHUNKS.delete(k);
 }
 const ZEBRAS = []; for (let i = 0; i < CROSS.length; i += 3) if (CROSS[i + 2] === 1) ZEBRAS.push(CROSS[i], CROSS[i + 1]);
 const CLOTHES = ['#1b1b1b', '#1b1b1b', '#2b2b2b', '#3a3f4a', '#5a4636', '#7a2b2b', '#2f4f6f', '#6b6b6b', '#c9b37a', '#3d5a3d', '#d8d2c4', '#a33a5a', '#e07a2e'];
@@ -589,7 +690,7 @@ function updatePeds(dt, police) {
   }
   // StVO §26: stop for anyone waiting at or on a zebra crossing
   if (drv && Math.abs(sp) > 3) for (let z = 0; z < ZEBRAS.length; z += 2) {
-    if (dist(ZEBRAS[z], ZEBRAS[z + 1], player.x, player.y) > 5) continue;
+    if (Math.abs(ZEBRAS[z] - player.x) > 5 || dist(ZEBRAS[z], ZEBRAS[z + 1], player.x, player.y) > 5) continue;
     if (peds.some(pd => !pd.fall && dist(pd.x, pd.y, ZEBRAS[z], ZEBRAS[z + 1]) < 4)) offence('Ignored a pedestrian at a zebra crossing', 80, '', 0.7);
   }
 }
@@ -618,10 +719,10 @@ const keys = {};
 const G = { started: false, time: 0, money: 100, wanted: 0, stop: null, known: { x: 0, y: 0, t: -99 }, rolled: {}, warned: {}, reports: [], sus: 0, limit: 50,
   area: AVG_AREA, areaT: 0, lastSeen: 0, crimeCd: 0, bustT: 0, grace: 0, tGrace: 0, downT: 0, blockT: 0, heli: null, sirens: [], seen: false,
   job: null, nextOffer: 3, banner: '', bannerT: 0, shake: 0, distT: 0, D: null, spawnT: 0 };
-const startNode = nearestNode(894, 928); // Kottbusser Tor
+const startNode = nearestNode(...START); // Kottbusser Tor
 let player = makeCar('player', startNode, M.adj[startNode][0]);
 player.color = '#9bd32d';
-const shop = place(nearestNode(1930, 780)); // Wrangelkiez
+const shop = place(nearestNode(...SHOP_AT)); // Wrangelkiez
 const cars = [player]; // cars[0] is always the player: in a car, or on foot
 let camX = player.x, camY = player.y; // camera target in world metres (iso.js draws around it)
 
@@ -769,13 +870,7 @@ function updateJob(dt) {
 }
 
 // ---------- on foot: [F] gets out, and into any car close by (yours, a parked one, or someone else's)
-function stampParked(k, v) { // collision mask under a parked car: 3 = parked car, 0 = free again
-  const [x, y, a] = PARKED.slice(k, k + 3), c = Math.cos(a), s = Math.sin(a);
-  for (let l = -2.2; l <= 2.2; l += 0.5) for (let w = -0.9; w <= 0.9; w += 0.45) {
-    const px = x + c * l - s * w | 0, py = y + s * l + c * w | 0, i = py * W + px;
-    if (px >= 0 && py >= 0 && px < W && py < H && mask[i] === (v ? 0 : 3)) mask[i] = v;
-  }
-}
+function stampParked(k, v) { parkedPx(k, (px, py) => setCell(px, py, v, v ? 0 : 3)); } // 3 = parked car, 0 = free again
 function toggleCar() {
   if (player.kind === 'foot') return enterCar();
   if (Math.abs(speedOf(player)) > 3) return banner('Slow down to get out', 1.2);
@@ -804,7 +899,8 @@ function enterCar() {
   } else {
     // a parked car: smash the window
     let k = -1, kd = 3.5;
-    for (let i = 0; i < PARKED.length; i += 4) if (PARKED[i + 3] >= 0 && Math.abs(PARKED[i] - player.x) < 4 && Math.abs(PARKED[i + 1] - player.y) < 4) {
+    for (let ti = (player.x / 64 | 0) - 1; ti <= (player.x / 64 | 0) + 1; ti++) for (let tj = (player.y / 64 | 0) - 1; tj <= (player.y / 64 | 0) + 1; tj++)
+    for (const i of PGRID.get(ti + ',' + tj) || []) if (PARKED[i + 3] >= 0 && Math.abs(PARKED[i] - player.x) < 4 && Math.abs(PARKED[i + 1] - player.y) < 4) {
       const d = dist(PARKED[i], PARKED[i + 1], player.x, player.y);
       if (d < kd) { kd = d; k = i; }
     }
@@ -821,9 +917,9 @@ function enterCar() {
 }
 function walk(dt) {
   if (G.downT > 0) { G.downT -= dt; player.vx = player.vy = 0; return; }
-  // screen directions on the iso view: right = world (1,-1), down = world (1,1)
+  // screen directions: right = world (RX, RY), down = world (DX, DY) in the current view
   const ix = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0), iy = (keys.ArrowDown || keys.KeyS ? 1 : 0) - (keys.ArrowUp || keys.KeyW ? 1 : 0);
-  let wx = (ix + iy) / Math.SQRT2, wy = (iy - ix) / Math.SQRT2;
+  let wx = ix * RX + iy * DX, wy = ix * RY + iy * DY;
   const l = Math.hypot(wx, wy), v = keys.Space ? 5.5 : 2.4; // Space sprints
   if (l) { wx /= l; wy /= l; player.a = Math.atan2(wy, wx); player.ph += v * dt * 4; }
   player.vx = l ? wx * v : 0; player.vy = l ? wy * v : 0;
@@ -957,6 +1053,7 @@ function roadblock() { // from 3 stars: two patrol cars across the road ~200 m a
   msg('Polizeifunk 📻', `Roadblock going up at ${place(best).name}.`);
 }
 function update(dt) {
+  ensureAround(player.x, player.y, 450, 3); // the city near you: collision, parked cars, sidewalks
   G.time += dt; G.crimeCd -= dt; G.grace -= dt; G.tGrace -= dt; G.bannerT -= dt; G.shake *= 0.9;
   const police = cars.filter(c => c.kind === 'police'), foot = player.kind === 'foot';
 
@@ -1080,6 +1177,13 @@ addEventListener('keydown', e => {
   }
   if (G.started && !e.repeat && (e.code === 'KeyF' || e.code === 'KeyE')) toggleCar();
   if (G.started && !e.repeat && (e.code === 'KeyR' || e.code === 'KeyT')) radioKey(e.code);
+  if (G.started && !e.repeat && (e.code === 'KeyM' || (e.code === 'Escape' && BM.open))) toggleMap();
+  if (BM.open) { // the big map takes zoom and centring
+    if (e.key === '+' || e.key === '=') zoomMap(1.4);
+    if (e.key === '-') zoomMap(1 / 1.4);
+    if (e.code === 'KeyC') { BM.x = player.x; BM.y = player.y; }
+    e.preventDefault(); return;
+  }
   if (e.key === '+' || e.key === '=') isoZoom(1);
   if (e.key === '-') isoZoom(-1);
   if (!e.repeat && e.code === 'KeyP') { setDetail(DETAIL + 1); banner('Pixel detail ' + DETAIL + '/4', 1.5); }
@@ -1087,11 +1191,12 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+ensureAround(player.x, player.y, 450);
 loadWorks(); pollBVG();
 for (let k = 0; k < TRAFFIC; k++) spawn('traffic', 45, 380); // the city is already busy when you arrive
 for (let k = 0; k < BIKES; k++) spawn('bike', 45, 300);
 // fixed posts: the Polizeiwache at Kottbusser Tor (opened 2023) and a car at the Görlitzer Park entrance
-for (const [street, x, y] of [['Adalbertstraße', 894, 900], ['Wiener Straße', 2050, 1150]]) {
+for (const [street, x, y] of [['Adalbertstraße', ...LL(13.41819, 52.49936)], ['Wiener Straße', ...LL(13.43525, 52.49710)]]) {
   const id = M.names.indexOf(street); if (id < 0) continue;
   let best = -1, bd = 250;
   for (const n of MAIN) if (M.nodeName[n] === id && dist(NX(n), NY(n), x, y) < bd && dist(NX(n), NY(n), player.x, player.y) > 25) { bd = dist(NX(n), NY(n), x, y); best = n; }
@@ -1102,8 +1207,8 @@ for (let k = 0; k < PEDS; k++) spawnPed();
 let last = performance.now(), acc = 0;
 function frame(t) {
   acc += Math.min(0.1, (t - last) / 1000); last = t;
-  if (G.started) while (acc >= DT) { update(DT); acc -= DT; } else acc = 0;
-  render();
+  if (G.started && !BM.open) while (acc >= DT) { update(DT); acc -= DT; } else acc = 0;
+  if (BM.open) drawBigMap(); else render(); // the game is paused while the big map is open
   if ((hudT += 1) % 6 === 0) hud();
   requestAnimationFrame(frame);
 }

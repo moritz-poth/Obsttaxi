@@ -33,7 +33,7 @@
   #watch:empty { display: none; }
   #radio { font-size: 11px; color: var(--paper); margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(168, 224, 180, .14); }
   #radio::before { content: "▶ "; color: var(--green); }
-  #mini { position: fixed; left: 16px; bottom: 16px; width: 190px; height: 190px; border-radius: 50%; pointer-events: none; }
+  #mini { position: fixed; left: 16px; bottom: 16px; width: 260px; height: 260px; border-radius: 50%; pointer-events: none; }
   #phone { position: fixed; right: 16px; top: 14px; width: 300px; max-width: calc(100vw - 32px); max-height: calc(100vh - 60px); overflow: hidden; pointer-events: none; }
   #phone h2 { margin: 0; padding: 9px 12px 7px; display: flex; justify-content: space-between; border-bottom: 1px solid rgba(168, 224, 180, .14); font-weight: 400; }
   #phone h2 b { font: 800 15px "Inter Tight", Arial, sans-serif; color: var(--paper); letter-spacing: 0; text-transform: none; }
@@ -42,7 +42,9 @@
   .m { background: rgba(243, 239, 228, .07); border-radius: 3px; padding: 5px 8px; }
   .m b { color: var(--green); display: block; font-size: 11px; font-weight: 600; }
   .m.sys { background: none; color: var(--gold); padding: 0 8px; }
-  #help { position: fixed; left: 222px; bottom: 10px; right: 16px; font-size: 10px; color: rgba(243, 239, 228, .7); text-shadow: 0 1px 0 #0008; }
+  #help { position: fixed; left: 292px; bottom: 10px; right: 16px; font-size: 10px; color: rgba(243, 239, 228, .7); text-shadow: 0 1px 0 #0008; }
+  #bigmap { position: fixed; inset: 0; width: 100vw; height: 100vh; display: none; cursor: grab; touch-action: none; }
+  #bigmap:active { cursor: grabbing; }
   #start { position: fixed; inset: 0; display: grid; place-items: center; background: linear-gradient(#173a29f2, #0f2318f7); padding: 16px; }
   #start > div { max-width: 520px; }
   #start h1 { font: 800 64px/0.95 "Inter Tight", "Helvetica Neue", Arial, sans-serif; letter-spacing: -.03em; color: var(--paper); margin: 14px 0 18px; }
@@ -56,7 +58,7 @@
 <canvas id="c"></canvas>
 <canvas id="ui"></canvas>
 <div id="hud" class="card">
-  <div class="kicker">Obst-Taxi · Kreuzberg 36</div>
+  <div class="kicker">Obst-Taxi · Berlin</div>
   <div id="money"></div>
   <div id="stars"></div>
   <div id="row"><div id="limit">50</div><div id="speed"></div></div>
@@ -69,12 +71,13 @@
 </div>
 <div id="phone" class="card"><h2 class="kicker"><b>Fruits<em>app</em></b><span>● online</span></h2><div id="msgs"></div></div>
 <canvas id="mini" class="card"></canvas>
+<canvas id="bigmap"></canvas>
 <div id="help"><div id="live"></div>© OpenStreetMap contributors (ODbL) · VIZ Berlin · BVG via transport.rest · Polizei Berlin · pixel look after Pixel Plays by Amir Mushich (MIT)</div>
 <div id="start"><div>
-  <div class="kicker">Kreuzberg 36 · a tiny city, playable</div>
+  <div class="kicker">Berlin inside the Ringbahn · a whole city, playable</div>
   <h1>Obst-Taxi.<br><em>Fresh, fast, discreet.</em></h1>
   <p>People want exotic fruit, and they want it now. Pick up the goods, deliver them before they turn to mush, and keep the cops from sniffing it out.</p>
-  <p><kbd>↑↓←→</kbd> / <kbd>WASD</kbd> drive · <kbd>Space</kbd> handbrake · <kbd>F</kbd> get out / grab a car · <kbd>Y</kbd>/<kbd>N</kbd> answer · <kbd>R</kbd> radio on/off · <kbd>T</kbd> next track · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>P</kbd> pixel detail. Lost the cops? Get a respray.</p>
+  <p><kbd>↑↓←→</kbd> / <kbd>WASD</kbd> drive · <kbd>Space</kbd> handbrake · <kbd>F</kbd> get out / grab a car · <kbd>Y</kbd>/<kbd>N</kbd> answer · <kbd>R</kbd> radio on/off · <kbd>T</kbd> next track · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>P</kbd> pixel detail · <kbd>M</kbd> map. Lost the cops? Get a respray.</p>
   <p>German traffic rules apply: speed limits, one-way streets, red lights. If a patrol sees you break them, pull over and pay the fine. Drive off and they'll hunt you.</p>
   <div class="go">Press Enter to start ↵</div>
 </div></div>
