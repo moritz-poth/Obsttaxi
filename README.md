@@ -1,6 +1,12 @@
 # Obst-Taxi
 
-Top-down browser driving game on the real street map of Kreuzberg 36 (OpenStreetMap). Deliver exotic fruit, don't get caught.
+Isometric pixel-art driving game on the real street map of Kreuzberg 36 (OpenStreetMap). Deliver exotic fruit, don't get caught.
+
+**Controls:** arrows/WASD drive (on foot: walk in screen directions) · Space handbrake / sprint · F get out, grab a car (yours, a parked one, or someone else's) · Y/N answer messages · R radio on/off · T next track · +/− zoom · P pixel detail (1–4, remembered).
+
+**DirtyDave FM:** put music files into `music/`, run `node tools/playlist.mjs`, start the game. Tracks are not committed.
+
+**Code:** `game.js` simulation (traffic, pedestrians, police, jobs), `iso.js` renderer (64 m tiles baked once, depth buffer, pixel edges, minimap). Look after Pixel Plays by Amir Mushich (MIT, github.com/amirmushichge/pixel-plays).
 
 **Play:** open `index.html` in a browser. No server, no build step.
 
@@ -15,4 +21,4 @@ Top-down browser driving game on the real street map of Kreuzberg 36 (OpenStreet
 - Crime per Bezirksregion: Polizei Berlin, Kriminalitätsatlas (PKS), plus LOR shapes from gdi.berlin.de
 
 ## Rules
-Fines follow the German Bußgeldkatalog (car, in town). A patrol has to see the offence; then it pulls you over (stop, wait 3 s, pay). Drive off and you're wanted. Patrol density follows the area's crime rate; the chance they search the car follows its drug-offence rate.
+Fines follow the German Bußgeldkatalog (car, in town). A patrol has to see the offence. Small offences get a warning first; again within 2 minutes, or anything over €100, and they pull you over (stop within 15 s, wait 3 s, pay). Drive off and you're wanted. 1 star: they tail you; 2+: they ram; 3+: roadblocks; 4+: helicopter. Break line of sight and they search where they last saw you. Patrol density follows the area's crime rate; the chance they search the car follows its drug-offence rate.

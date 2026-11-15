@@ -66,7 +66,7 @@ await sleep(300);
 console.log('fled stop -> wanted', await ev('G.wanted'), 'stop', await ev('!!G.stop'));
 // red light
 const r2 = await ev(`(() => {
-  G.wanted = 0; G.stop = null; G.grace = 0; G.crimeCd = 0;
+  G.wanted = 0; G.stop = null; G.grace = 0; G.tGrace = 0; G.crimeCd = 0;
   const [n, j] = [...SIG].find(([n]) => { const r = nearestEdge(NX(n), NY(n), 3); return r && !r.e.ow; });
   player.x = NX(n); player.y = NY(n);
   for (let a = 0; a < 6.3; a += 0.1) if (light(j, a)[0] === 'r') { player.a = a; break; }
@@ -98,6 +98,23 @@ await sleep(2500); await shot('7-sidestreet');
 console.log('counts: traffic', await ev('cars.filter(c => c.kind === "traffic").length'), 'onscreen cars', await ev('cars.filter(c => onScreen(c.x, c.y, 0)).length'), 'peds', await ev('peds.length'), 'onscreen peds', await ev('peds.filter(p => onScreen(p.x, p.y, 0)).length'), 'parked', await ev('PARKED.length / 4'));
 const fps2 = await (await cmd('Runtime.evaluate', { expression: 'new Promise(r=>{let n=0,s=performance.now();(function f(){n++; if(performance.now()-s<2000) requestAnimationFrame(f); else r(n/2)})()})', awaitPromise: true, returnByValue: true })).result.result.value;
 console.log('fps with full traffic', fps2);
+// traffic: lane discipline (two-way roads: right of the centre line), pedestrians off the carriageway
+console.log('lanes right/mid/wrong, peds on road:', await ev(`(() => { let r = 0, m = 0, w = 0;
+  for (const c of cars) { if (c.kind !== 'traffic' || c.abandoned) continue; const q = nearestEdge(c.x, c.y, 12); if (!q || q.e.ow) continue;
+    const e = q.e, dx = NX(e.b) - NX(e.a), dy = NY(e.b) - NY(e.a), f = Math.cos(c.a) * dx + Math.sin(c.a) * dy > 0 ? 1 : -1;
+    const lat = ((c.x - NX(e.a)) * -dy + (c.y - NY(e.a)) * dx) / Math.hypot(dx, dy) * f; lat > 0.8 ? r++ : lat < -0.8 ? w++ : m++; }
+  return [r, m, w, peds.filter(p => !p.fall && onRoad(p.x, p.y) && !nearCrossing(p.x, p.y, 7)).length]; })()`));
+console.log('bikes', await ev('cars.filter(c => c.kind === "bike").length'), 'avg traffic km/h', await ev('Math.round(cars.filter(c => c.kind === "traffic").reduce((s, c) => s + Math.abs(speedOf(c)), 0) / cars.filter(c => c.kind === "traffic").length * 3.6)'));
+// on foot: get out, walk, take a parked car, get out again, take a moving car (carjacking)
+await ev('G.wanted = 0; G.stop = null; for (const c of cars) { c.chase = false; c.stop = false; } player.vx = player.vy = 0; toggleCar()');
+console.log('got out -> kind', await ev('player.kind'), 'my car abandoned', await ev('cars.some(c => c.mine && c.abandoned)'));
+await key('keyDown', 'ArrowRight', 'ArrowRight'); await sleep(1000); await key('keyUp', 'ArrowRight', 'ArrowRight');
+console.log('walked', await ev('Math.round(Math.hypot(player.vx, player.vy) * 10) / 10 + " m/s last, at " + [player.x | 0, player.y | 0]'));
+console.log('take parked car ->', await ev(`(() => { let k = 0; while (PARKED[k + 3] < 0) k += 4; player.x = PARKED[k] + 1.5; player.y = PARKED[k + 1]; const n = PARKED.filter((v, i) => i % 4 === 3 && v >= 0).length;
+  toggleCar(); return [player.kind, PARKED.filter((v, i) => i % 4 === 3 && v >= 0).length === n - 1]; })()`));
+await sleep(400); await shot('9-foot');
+console.log('carjack ->', await ev(`(() => { toggleCar(); const v = cars.find(c => c.kind === 'traffic' && !c.abandoned && onScreen(c.x, c.y, 60)) || cars.find(c => c.kind === 'traffic' && !c.abandoned);
+  player.x = v.x + 2; player.y = v.y; const np = peds.length; toggleCar(); return [player === v, player.kind, peds.length > np || 'no walk node near', G.reports.length + G.wanted > 0 || 'no witness (random)']; })()`));
 console.log('errors after rules', errors);
 console.log('errors', errors);
 ws.close(); chrome.kill();

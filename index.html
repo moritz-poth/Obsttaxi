@@ -4,59 +4,83 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Obst-Taxi</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@1&family=Inter+Tight:wght@600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font: 14px/1.35 ui-monospace, Menlo, monospace; color: #fff; }
-  canvas { display: block; width: 100vw; height: 100vh; }
-  #hud { position: fixed; left: 16px; top: 14px; text-shadow: 2px 2px 0 #000; pointer-events: none; }
-  #money { font: 900 30px Impact, "Arial Black", sans-serif; color: #9bd32d; }
-  #stars { font-size: 26px; color: #ffd23f; letter-spacing: 2px; }
-  #stars .off { color: rgba(255,255,255,.25); }
-  #speed, #goal { font-weight: bold; }
-  #row { display: flex; align-items: center; gap: 10px; margin: 4px 0; }
-  #limit { width: 34px; height: 34px; border-radius: 50%; background: #fff; border: 5px solid #d0021b; color: #000; text-shadow: none;
-    font: 900 15px Arial, sans-serif; display: grid; place-items: center; }
-  #area { font-size: 12px; color: #ddd; margin-top: 4px; }
-  #sus { display: none; margin-top: 4px; font-size: 12px; }
-  #sus div { width: 180px; height: 6px; background: #333; border: 2px solid #000; }
-  #sus i { display: block; height: 100%; background: #4a8cff; }
-  #live { font-size: 11px; color: #aaa; }
-  #cargo { margin-top: 6px; display: none; }
-  #bar { width: 180px; height: 10px; border: 2px solid #000; background: #333; margin-top: 3px; }
-  #bar i { display: block; height: 100%; }
-  #phone { position: fixed; right: 16px; top: 14px; width: 300px; max-width: calc(100vw - 32px); background: #1b1f24ee; border: 3px solid #000; border-radius: 14px; overflow: hidden; pointer-events: none; }
-  #phone h2 { margin: 0; padding: 6px 10px; font-size: 13px; background: #2d6a3a; }
-  #msgs { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-  .m { background: #2c333b; border-radius: 8px; padding: 5px 8px; }
-  .m b { color: #9bd32d; display: block; font-size: 12px; }
-  .m.sys { background: none; color: #ffd23f; padding: 0 8px; }
-  #help { position: fixed; left: 16px; bottom: 10px; font-size: 12px; color: #ddd; text-shadow: 1px 1px 0 #000; }
-  #start { position: fixed; inset: 0; display: grid; place-items: center; background: #000a; text-align: center; padding: 16px; }
-  #start h1 { font: 900 64px Impact, "Arial Black", sans-serif; color: #9bd32d; margin: 0; text-shadow: 4px 4px 0 #000; }
-  #start p { max-width: 520px; margin: 12px auto; }
-  #start kbd { background: #333; border-radius: 4px; padding: 1px 6px; }
+  :root { --ink: #132a1e; --deep: #173a29; --paper: #f3efe4; --green: #9bd32d; --mint: #a8e0b4; --gold: #e8c45a; --muted: #9fb3a6; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #182e22; color: var(--paper); font: 13px/1.35 "JetBrains Mono", ui-monospace, Menlo, monospace; }
+  #c { position: fixed; left: 0; top: 0; display: block; image-rendering: pixelated; }
+  #ui { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
+  .card { background: rgba(19, 42, 30, .88); border-radius: 4px; box-shadow: 0 0 0 1px rgba(168, 224, 180, .14); }
+  .kicker { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--mint); }
+  #hud { position: fixed; left: 16px; top: 14px; padding: 10px 14px 12px; pointer-events: none; min-width: 210px; }
+  #money { font: 800 30px/1 "Inter Tight", "Helvetica Neue", Arial, sans-serif; color: var(--paper); letter-spacing: -.02em; margin: 4px 0 2px; }
+  #stars { font-size: 18px; color: var(--gold); letter-spacing: 3px; }
+  #stars .off { color: rgba(243, 239, 228, .18); }
+  #row { display: flex; align-items: center; gap: 10px; margin: 8px 0 6px; }
+  #limit { width: 30px; height: 30px; border-radius: 50%; background: #fff; border: 4px solid #d0021b; color: #000;
+    font: 800 14px "Inter Tight", Arial, sans-serif; display: grid; place-items: center; }
+  #speed { font: 600 15px "Inter Tight", Arial, sans-serif; }
+  #goal { font: italic 17px/1.2 "Instrument Serif", Georgia, serif; color: var(--mint); max-width: 300px; }
+  #area { font-size: 10px; color: var(--muted); margin-top: 6px; max-width: 300px; }
+  #sus { display: none; margin-top: 6px; font-size: 11px; }
+  #sus div, #bar { width: 200px; height: 6px; background: rgba(243, 239, 228, .12); margin-top: 3px; }
+  #sus i, #bar i { display: block; height: 100%; }
+  #sus i { background: #6fa2ff; }
+  #cargo { margin-top: 8px; display: none; font-size: 12px; }
+  #watch { font-size: 11px; color: var(--gold); margin-top: 4px; min-height: 0; }
+  #watch:empty { display: none; }
+  #radio { font-size: 11px; color: var(--paper); margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(168, 224, 180, .14); }
+  #radio::before { content: "▶ "; color: var(--green); }
+  #mini { position: fixed; left: 16px; bottom: 16px; width: 190px; height: 190px; border-radius: 50%; pointer-events: none; }
+  #phone { position: fixed; right: 16px; top: 14px; width: 300px; max-width: calc(100vw - 32px); max-height: calc(100vh - 60px); overflow: hidden; pointer-events: none; }
+  #phone h2 { margin: 0; padding: 9px 12px 7px; display: flex; justify-content: space-between; border-bottom: 1px solid rgba(168, 224, 180, .14); font-weight: 400; }
+  #phone h2 b { font: 800 15px "Inter Tight", Arial, sans-serif; color: var(--paper); letter-spacing: 0; text-transform: none; }
+  #phone h2 b em { font: italic 17px "Instrument Serif", Georgia, serif; color: var(--mint); }
+  #msgs { padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .m { background: rgba(243, 239, 228, .07); border-radius: 3px; padding: 5px 8px; }
+  .m b { color: var(--green); display: block; font-size: 11px; font-weight: 600; }
+  .m.sys { background: none; color: var(--gold); padding: 0 8px; }
+  #help { position: fixed; left: 222px; bottom: 10px; right: 16px; font-size: 10px; color: rgba(243, 239, 228, .7); text-shadow: 0 1px 0 #0008; }
+  #start { position: fixed; inset: 0; display: grid; place-items: center; background: linear-gradient(#173a29f2, #0f2318f7); padding: 16px; }
+  #start > div { max-width: 520px; }
+  #start h1 { font: 800 64px/0.95 "Inter Tight", "Helvetica Neue", Arial, sans-serif; letter-spacing: -.03em; color: var(--paper); margin: 14px 0 18px; }
+  #start h1 em { font: italic 400 70px "Instrument Serif", Georgia, serif; color: var(--mint); letter-spacing: 0; }
+  #start p { margin: 10px 0; color: rgba(243, 239, 228, .85); }
+  #start kbd { font: inherit; border: 1px solid rgba(168, 224, 180, .4); border-radius: 3px; padding: 0 5px; }
+  #start .go { margin-top: 22px; font-weight: 600; color: var(--gold); letter-spacing: .12em; text-transform: uppercase; font-size: 11px; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="hud">
+<canvas id="ui"></canvas>
+<div id="hud" class="card">
+  <div class="kicker">Obst-Taxi · Kreuzberg 36</div>
   <div id="money"></div>
   <div id="stars"></div>
   <div id="row"><div id="limit">50</div><div id="speed"></div></div>
   <div id="goal"></div>
-  <div id="area"></div>
-  <div id="sus">👃 cops getting suspicious<div><i></i></div></div>
+  <div id="sus">cops getting suspicious<div><i></i></div></div>
+  <div id="watch"></div>
   <div id="cargo"><span id="fruit"></span><div id="bar"><i></i></div></div>
+  <div id="radio"></div>
+  <div id="area"></div>
 </div>
-<div id="phone"><h2>📱 Fruitsapp</h2><div id="msgs"></div></div>
-<div id="help"><div id="live"></div>Arrows/WASD drive · Space handbrake · Y/N answer messages · +/− zoom · Data: © OpenStreetMap contributors (ODbL) · VIZ Berlin · BVG via transport.rest · Polizei Berlin Kriminalitätsatlas</div>
+<div id="phone" class="card"><h2 class="kicker"><b>Fruits<em>app</em></b><span>● online</span></h2><div id="msgs"></div></div>
+<canvas id="mini" class="card"></canvas>
+<div id="help"><div id="live"></div>© OpenStreetMap contributors (ODbL) · VIZ Berlin · BVG via transport.rest · Polizei Berlin · pixel look after Pixel Plays by Amir Mushich (MIT)</div>
 <div id="start"><div>
-  <h1>OBST-TAXI</h1>
-  <p>Kreuzberg 36. People want exotic fruit, and they want it now. Pick up the goods, deliver them before they turn to mush, and keep the cops from sniffing it out.</p>
-  <p><kbd>↑↓←→</kbd>/<kbd>WASD</kbd> drive · <kbd>Space</kbd> handbrake · <kbd>Y</kbd>/<kbd>N</kbd> answer · lost the cops? Get a respray.</p>
+  <div class="kicker">Kreuzberg 36 · a tiny city, playable</div>
+  <h1>Obst-Taxi.<br><em>Fresh, fast, discreet.</em></h1>
+  <p>People want exotic fruit, and they want it now. Pick up the goods, deliver them before they turn to mush, and keep the cops from sniffing it out.</p>
+  <p><kbd>↑↓←→</kbd> / <kbd>WASD</kbd> drive · <kbd>Space</kbd> handbrake · <kbd>F</kbd> get out / grab a car · <kbd>Y</kbd>/<kbd>N</kbd> answer · <kbd>R</kbd> radio on/off · <kbd>T</kbd> next track · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>P</kbd> pixel detail. Lost the cops? Get a respray.</p>
   <p>German traffic rules apply: speed limits, one-way streets, red lights. If a patrol sees you break them, pull over and pay the fine. Drive off and they'll hunt you.</p>
-  <p><b>Press Enter to start</b></p>
+  <div class="go">Press Enter to start ↵</div>
 </div></div>
 <script src="map.js"></script>
+<script src="music/playlist.js"></script>
+<script src="iso.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

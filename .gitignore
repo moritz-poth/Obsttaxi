@@ -1,1 +1,4 @@
 data/
+music/*
+!music/README.md
+.omc/
