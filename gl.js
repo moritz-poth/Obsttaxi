@@ -223,6 +223,19 @@ function groundTexture(x0, y0) {
   t.magFilter = T3.NearestFilter; t.minFilter = T3.NearestMipmapLinearFilter; t.anisotropy = 4;
   return t;
 }
+// roof furniture: chimneys and satellite dishes on Altbau, plant rooms on flat roofs. -> [x, y, z, angle, kind]
+function roofBits(b) {
+  if (b.k === 'low' || b.k === 'deck') return [];
+  const p = b.p, n = b.n, k = p.length / 2, out = [];
+  for (let i = 0; i < k && out.length < 6; i++) {
+    const j = (i + 1) % k, ax = p[2 * i], ay = p[2 * i + 1], bx = p[2 * j], by = p[2 * j + 1], L = Math.hypot(bx - ax, by - ay);
+    if (L < 7 || h2(n * 31, ax) > .55) continue;
+    const nx = (by - ay) * b.ws / L, ny = -(bx - ax) * b.ws / L, d = b.r === 'f' ? 4 + 3 * h2(n, ay) : 1.6;
+    const x = (ax + bx) / 2 - nx * d, y = (ay + by) / 2 - ny * d; // inwards from the eave
+    if (inPoly(p, x, y)) out.push([x, y, b.h, Math.atan2(by - ay, bx - ax), b.r === 'f' ? 'box' : h2(n, bx) < .3 ? 'dish' : 'chimney']);
+  }
+  return out;
+}
 function buildingGeometry(bs) { // walls (with facade attributes) and flat roofs, merged into one geometry
   const P = [], N = [], C = [], U = [], S = [];
   const vert = (x, y, z, nx, ny, nz, c, u, st) => { P.push(x, z, y); N.push(nx, nz, ny); C.push(c.r, c.g, c.b); U.push(...u); S.push(...st); };
@@ -284,6 +297,16 @@ function buildChunk(ci, cj) {
   // buildings (each in the chunk of its centre)
   const bs = query('bs', x0, y0, x0 + CK, y0 + CK).filter(b => inC(b.cx, b.cy)).concat(decks().filter(d => inC(d.cx, d.cy)));
   if (bs.length) { const m = new T3.Mesh(buildingGeometry(bs), MAT.facade); m.castShadow = m.receiveShadow = true; group.add(m); }
+  const bits = bs.flatMap(roofBits), boxes = bits.filter(b => b[4] !== 'dish'), dishes = bits.filter(b => b[4] === 'dish');
+  const bm = instanced(boxGeo, boxes.length), dm = instanced(crownGeo, dishes.length);
+  boxes.forEach(([x, y, z, a, kind], k) => {
+    if (kind === 'chimney') { putBox(bm, k, x, y, z, a, .9, 1.3, .7); bm.setColorAt(k, col3([150, 84, 62])); }
+    else { putBox(bm, k, x, y, z, a, 3, 1.5, 2); bm.setColorAt(k, col3([170, 170, 166])); }
+  });
+  dishes.forEach(([x, y, z, a], k) => {
+    _q.setFromAxisAngle(_up, -a); _p.set(x, z + .5, y); _s.set(.45, .45, .12); _m.compose(_p, _q, _s); dm.setMatrixAt(k, _m); dm.setColorAt(k, col3([236, 236, 230]));
+  });
+  group.add(bm, dm);
   // trees
   const ts = query('trees', x0, y0, x0 + CK, y0 + CK).filter(i => inC(M.trees[i], M.trees[i + 1]));
   const trunk = instanced(boxGeo, ts.length, MAT.trees), crown = instanced(crownGeo, ts.length * 5, MAT.trees); // a crown is 5 leaf clumps
@@ -309,9 +332,18 @@ function buildChunk(ci, cj) {
       run += L;
     }
   }
-  const deck = instanced(boxGeo, segs.length), pillars = instanced(boxGeo, pil.length * 2);
-  segs.forEach(([x, y, a, L], k) => { putBox(deck, k, x, y, 5.9, a, L + .3, 1.2, 8); deck.setColorAt(k, col3(STEEL)); });
-  pil.forEach(([x, y, a], k) => { for (const s of [0, 1]) { const o = s ? 2.6 : -2.6; putBox(pillars, 2 * k + s, x - Math.sin(a) * o, y + Math.cos(a) * o, 0, a, .6, 5.9, .6); pillars.setColorAt(2 * k + s, col3(STEEL, .8)); } });
+  const deck = instanced(boxGeo, segs.length), pillars = instanced(boxGeo, pil.length);
+  // OSM maps each track as its own way, ~3 m apart: two 5.2 m decks make one 8 m viaduct
+  segs.forEach(([x, y, a, L], k) => { putBox(deck, k, x, y, 5.9, a, L + .3, 1.2, 5.2); deck.setColorAt(k, col3(STEEL)); });
+  // the track on top: ballast bed and two rails along the way's centre line
+  const bed = instanced(boxGeo, segs.length), rails = instanced(boxGeo, segs.length * 2);
+  segs.forEach(([x, y, a, L], k) => {
+    const sx = -Math.sin(a), sy = Math.cos(a);
+    putBox(bed, k, x, y, 7.1, a, L + .3, .12, 2.6); bed.setColorAt(k, col3([110, 96, 84]));
+    [-.72, .72].forEach((r, q) => { putBox(rails, 2 * k + q, x + sx * r, y + sy * r, 7.22, a, L + .3, .12, .12); rails.setColorAt(2 * k + q, col3([196, 196, 202])); });
+  });
+  group.add(bed, rails);
+  pil.forEach(([x, y, a], k) => { putBox(pillars, k, x, y, 0, a, .6, 5.9, .6); pillars.setColorAt(k, col3(STEEL, .8)); }); // one steel column per track
   group.add(deck, pillars);
   // bus stops: pole with the green H on a yellow sign
   const stops = []; for (let i = 0; i < M.stops.length; i += 2) if (inC(M.stops[i], M.stops[i + 1])) stops.push(i);

@@ -87,6 +87,7 @@ const r3 = await ev(`(() => { try {
   collide();
   return [G.wanted, !!G.stop, Object.keys(G.warned).join()];
 } catch (e) { return String(e); } })()`);
+console.log('roof bits on 20 Altbau roofs 20x12 m (count > 0, all on the roof):', await ev(`(() => { const b = []; for (let n = 1; n <= 20; n++) b.push(...roofBits({ k: 'alt', r: 'm', h: 20, n, ws: 1, p: [0, 0, 20, 0, 20, 12, 0, 12] })); return [b.length, b.every(([x, y]) => x > 0 && x < 20 && y > 0 && y < 12)]; })()`));
 console.log('rear-ended by AI -> wanted, stop, warned (want 0 false ""):', r3);
 await ev('Math.random = window._rnd');
 // pursuit: police chase the last known position, not you. Hide 300 m away -> they search there, then give up
